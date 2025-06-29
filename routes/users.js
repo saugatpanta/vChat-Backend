@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { protect } = require('../middlewares/auth');
 const {
   getUsers,
   getUser,
@@ -8,12 +9,11 @@ const {
   unfollowUser,
   getFollowers,
   getFollowing,
-  deleteAccount,
+  deleteAccount
 } = require('../controllers/userController');
-const { protect, authorize } = require('../middlewares/auth');
 const upload = require('../services/fileUpload');
 
-router.get('/', protect, authorize('admin'), getUsers);
+router.get('/', protect, getUsers);
 router.get('/:id', protect, getUser);
 router.put('/profile', protect, upload.single('profilePhoto'), updateProfile);
 router.put('/follow/:id', protect, followUser);
