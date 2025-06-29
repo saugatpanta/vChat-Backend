@@ -1,0 +1,108 @@
+const nodemailer = require('nodemailer');
+const pug = require('pug');
+const { htmlToText } = require('html-to-text');
+
+module.exports = class Email {
+  constructor(user, url) {
+    this.to = user.email;
+    this.firstName = user.username.split(' ')[0];
+    this.url = url;
+    this.from = `vChat <${process.env.EMAIL_FROM}>`;
+  }
+
+  newTransport() {
+    if (process.env.NODE_ENV === 'production') {
+      // Sendgrid
+      return nodemailer.const nodemailer = require('nodemailer');
+const logger = require('../middlewares/logger');
+const { EMAIL_HOST, EMAIL_PORT, EMAIL_USER, EMAIL_PASS } = require('../utils/constants');
+
+// Create a transporter
+const transporter = nodemailer.createTransport({
+  host: EMAIL_HOST,
+  port: EMAIL_PORT,
+  secure: false, // true for 465, false for other ports
+  auth: {
+    user: EMAIL_USER,
+    pass: EMAIL_PASS,
+  },
+});
+
+// Verify transporter
+transporter.verify((error) => {
+  if (error) {
+    logger.error(`Email transporter error: ${error}`);
+  } else {
+    logger.info('Email server is ready to take our messages');
+  }
+});
+
+// Send email
+const sendEmail = async (options) => {
+  try {
+    const message = {
+      from: `"vChat" <${EMAIL_USER}>`,
+      to: options.email,
+      subject: options.subject,
+      text: options.message,
+      html: options.html || `<p>${options.message}</p>`,
+    };
+
+    await transporter.sendMail(message);
+  } catch (error) {
+    logger.error(`Email send error: ${error.message}`);
+    throw error;
+  }
+};
+
+module.exports = { sendEmail };createTransport({
+        service: 'SendGrid',
+        auth: {
+          user: process.env.SENDGRID_USERNAME,
+          pass: process.env.SENDGRID_PASSWORD
+        }
+      });
+    }
+
+    return nodemailer.createTransport({
+      host: process.env.EMAIL_HOST,
+      port: process.env.EMAIL_PORT,
+      auth: {
+        user: process.env.EMAIL_USERNAME,
+        pass: process.env.EMAIL_PASSWORD
+      }
+    });
+  }
+
+  async send(template, subject) {
+    // 1) Render HTML based on a pug template
+    const html = pug.renderFile(`${__dirname}/../views/email/${template}.pug`, {
+      firstName: this.firstName,
+      url: this.url,
+      subject
+    });
+
+    // 2) Define email options
+    const mailOptions = {
+      from: this.from,
+      to: this.to,
+      subject,
+      html,
+      text: htmlToText(html)
+    };
+
+    // 3) Create a transport and send email
+    await this.newTransport().sendMail(mailOptions);
+  }
+
+  async sendWelcome() {
+    await this.send('welcome', 'Welcome to the vChat Family!');
+  }
+
+  async sendPasswordReset() {
+    await this.send(
+      'passwordReset',
+      'Your password reset token (valid for only 10 minutes)'
+    );
+  }
+};
