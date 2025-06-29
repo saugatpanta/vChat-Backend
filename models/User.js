@@ -1,94 +1,125 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const { JWT_SECRET, JWT_EXPIRE } = require('../utils/constants');
 
 const UserSchema = new mongoose.Schema({
   username: {
     type: String,
-    required: [true, 'Please provide a username'],
+    required: [true, 'Please add a username'],
     unique: true,
     trim: true,
-    minlength: 3,
-    maxlength: 20
+    maxlength: [20, 'Username cannot be more than 20 characters'],
   },
   email: {
     type: String,
-    required: [true, 'Please provide an email'],
+    required: [true, 'Please add an email'],
     unique: true,
     match: [
-      /^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/,
-      'Please provide a valid email'
-    ]
+      /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
+      'Please add a valid email',
+    ],
   },
   password: {
     type: String,
-    required: [true, 'Please provide a password'],
+    required: [true, 'Please add a password'],
     minlength: 6,
-    select: false
+    select: false,
   },
-  profilePicture: {
-    type: String,
-    default: 'default.jpg'
-  },
-  coverPhoto: {
-    type: String
+  profilePhoto: {
+    url: String,
+    publicId: String,
   },
   bio: {
     type: String,
-    maxlength: 150
+    maxlength: [150, 'Bio cannot be more than 150 characters'],
   },
-  followers: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
-  following: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
+  phone: {
+    type: String,
+    match: [
+      /^(\+\d{1,2}\s?)?1?\-?\.?\s?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}$/,
+      'Please add a valid phone number',
+    ],
+  },
+  status: {
+    type: String,
+    enum: ['online', 'offline', 'away', 'busy'],
+    default: 'offline',
+  },
   lastSeen: {
-    type: Date
+    type: Date,
+    default: Date.now,
   },
-  isOnline: {
+  verified: {
     type: Boolean,
-    default: false
+    default: false,
   },
-  settings: {
-    theme: {
-      type: String,
-      enum: ['light', 'dark', 'system'],
-      default: 'system'
+  verificationOTP: String,
+  otpExpire: Date,
+  resetPasswordToken: String,
+  resetPasswordExpire: Date,
+  followers: [
+    {
+      type: mongoose.Schema.ObjectId,
+      ref: 'User',
     },
-    notifications: {
-      type: Boolean,
-      default: true
-    }
-  },
+  ],
+  following: [
+    {
+      type: mongoose.Schema.ObjectId,
+      ref: 'User',
+    },
+  ],
   createdAt: {
     type: Date,
-    default: Date.now
-  }
+    default: Date.now,
+  },
 });
 
-// Hash password before saving
-UserSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
+// Encrypt password using bcrypt
+UserSchema.pre('save', async function (next) {
+  if (!this.isModified('password')) {
+    next();
+  }
+
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
-  next();
 });
 
-// Generate JWT token
-UserSchema.methods.generateAuthToken = function() {
-  return jwt.sign(
-    { id: this._id, username: this.username },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRE }
-  );
+// Sign JWT and return
+UserSchema.methods.getSignedJwtToken = function () {
+  return jwt.sign({ id: this._id }, JWT_SECRET, {
+    expiresIn: JWT_EXPIRE,
+  });
 };
 
 // Match user entered password to hashed password in database
-UserSchema.methods.matchPassword = async function(enteredPassword) {
+UserSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
+};
+
+// Generate and hash password token
+UserSchema.methods.getResetPasswordToken = function () {
+  // Generate token
+  const resetToken = crypto.randomBytes(20).toString('hex');
+
+  // Hash token and set to resetPasswordToken field
+  this.resetPasswordToken = crypto
+    .createHash('sha256')
+    .update(resetToken)
+    .digest('hex');
+
+  // Set expire
+  this.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+  return resetToken;
+};
+
+// Update lastSeen when user goes offline
+UserSchema.methods.updateLastSeen = function () {
+  this.lastSeen = Date.now();
+  return this.save();
 };
 
 module.exports = mongoose.model('User', UserSchema);

@@ -1,37 +1,63 @@
 const mongoose = require('mongoose');
 
+const ReactionSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.ObjectId,
+    ref: 'User',
+    required: true,
+  },
+  reaction: {
+    type: String,
+    required: true,
+    enum: ['like', 'love', 'haha', 'wow', 'sad', 'angry'],
+  },
+});
+
 const StorySchema = new mongoose.Schema({
   user: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: mongoose.Schema.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
   },
   media: {
-    url: String,
+    url: {
+      type: String,
+      required: true,
+    },
+    publicId: {
+      type: String,
+      required: true,
+    },
     type: {
       type: String,
       enum: ['image', 'video'],
-      required: true
-    }
+      required: true,
+    },
   },
   caption: {
     type: String,
-    maxlength: 100
+    maxlength: [100, 'Caption cannot be more than 100 characters'],
   },
-  views: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
-  expiresAt: {
-    type: Date,
-    default: () => new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+  duration: {
+    type: Number,
+    default: 24, // hours
+    min: 1,
+    max: 48,
   },
+  views: [
+    {
+      type: mongoose.Schema.ObjectId,
+      ref: 'User',
+    },
+  ],
+  reactions: [ReactionSchema],
   createdAt: {
     type: Date,
-    default: Date.now
-  }
+    default: Date.now,
+  },
 });
 
-StorySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+// Index for better query performance
+StorySchema.index({ user: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Story', StorySchema);

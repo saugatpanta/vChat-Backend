@@ -1,46 +1,54 @@
-const ErrorResponse = require('../utils/errorResponse');
+const logger = require('./logger');
 
-const errorHandler = (err, req, res, next) => {
-  let error = { ...err };
-  error.message = err.message;
-
-  // Log to console for dev
-  console.error(err.stack.red);
+// Error handler middleware
+exports.errorHandler = (err, req, res, next) => {
+  // Log the error
+  logger.error(`Error Handler: ${err.message}`);
 
   // Mongoose bad ObjectId
   if (err.name === 'CastError') {
-    const message = `Resource not found with id of ${err.value}`;
-    error = new ErrorResponse(message, 404);
+    return res.status(400).json({
+      success: false,
+      message: 'Resource not found',
+    });
   }
 
   // Mongoose duplicate key
   if (err.code === 11000) {
-    const message = 'Duplicate field value entered';
-    error = new ErrorResponse(message, 400);
+    const field = Object.keys(err.keyValue)[0];
+    return res.status(400).json({
+      success: false,
+      message: `Duplicate field value entered for ${field}`,
+    });
   }
 
   // Mongoose validation error
   if (err.name === 'ValidationError') {
-    const message = Object.values(err.errors).map(val => val.message);
-    error = new ErrorResponse(message, 400);
+    const messages = Object.values(err.errors).map(val => val.message);
+    return res.status(400).json({
+      success: false,
+      message: messages.join(', '),
+    });
   }
 
   // JWT errors
   if (err.name === 'JsonWebTokenError') {
-    const message = 'Not authorized';
-    error = new ErrorResponse(message, 401);
+    return res.status(401).json({
+      success: false,
+      message: 'Not authorized',
+    });
   }
 
-  // JWT expired
   if (err.name === 'TokenExpiredError') {
-    const message = 'Session expired, please login again';
-    error = new ErrorResponse(message, 401);
+    return res.status(401).json({
+      success: false,
+      message: 'Session expired, please login again',
+    });
   }
 
-  res.status(error.statusCode || 500).json({
+  // Default to 500 server error
+  res.status(err.statusCode || 500).json({
     success: false,
-    error: error.message || 'Server Error'
+    message: err.message || 'Server Error',
   });
 };
-
-module.exports = errorHandler;

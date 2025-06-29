@@ -1,22 +1,25 @@
 const express = require('express');
+const router = express.Router();
 const {
   createStory,
   getStories,
-  getMyStories,
+  getStory,
+  deleteStory,
   viewStory,
-  deleteStory
+  reactToStory,
 } = require('../controllers/storyController');
 const { protect } = require('../middlewares/auth');
-const { upload } = require('../config/cloudinary');
+const upload = require('../services/fileUpload');
 
-const router = express.Router();
+router.route('/')
+  .post(protect, upload.single('file'), createStory)
+  .get(protect, getStories);
 
-router.use(protect);
+router.route('/:id')
+  .get(protect, getStory)
+  .delete(protect, deleteStory);
 
-router.post('/', upload.single('media'), createStory);
-router.get('/', getStories);
-router.get('/me', getMyStories);
-router.put('/:storyId/view', viewStory);
-router.delete('/:storyId', deleteStory);
+router.post('/:id/view', protect, viewStory);
+router.post('/:id/react', protect, reactToStory);
 
 module.exports = router;

@@ -1,45 +1,39 @@
 const crypto = require('crypto');
 
-// Generate random token
-exports.generateRandomToken = () => {
-  return crypto.randomBytes(20).toString('hex');
+// Generate OTP
+const generateOTP = () => {
+  return crypto.randomInt(100000, 999999).toString();
+};
+
+// Format duration (e.g., 3600 -> 1h)
+const formatDuration = (seconds) => {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+
+  return `${h > 0 ? h + 'h ' : ''}${m > 0 ? m + 'm ' : ''}${s}s`;
 };
 
 // Filter object fields
-exports.filterObj = (obj, ...allowedFields) => {
+const filterObj = (obj, ...allowedFields) => {
   const newObj = {};
-  Object.keys(obj).forEach(el => {
+  Object.keys(obj).forEach((el) => {
     if (allowedFields.includes(el)) newObj[el] = obj[el];
   });
   return newObj;
 };
 
-// Create slug from string
-exports.createSlug = str => {
-  return str
-    .toLowerCase()
-    .replace(/[^\w\s]/g, '')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-');
+// Generate random string
+const generateRandomString = (length) => {
+  return crypto
+    .randomBytes(Math.ceil(length / 2))
+    .toString('hex')
+    .slice(0, length);
 };
 
-// Format date
-exports.formatDate = (date, options = {}) => {
-  const defaultOptions = {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  };
-  return new Date(date).toLocaleDateString(undefined, {
-    ...defaultOptions,
-    ...options
-  });
-};
-
-// Pagination
-exports.paginate = (query, page = 1, limit = 10) => {
-  const skip = (page - 1) * limit;
-  return query.skip(skip).limit(limit);
+module.exports = {
+  generateOTP,
+  formatDuration,
+  filterObj,
+  generateRandomString,
 };

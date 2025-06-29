@@ -1,16 +1,21 @@
-const fs = require('fs');
-const path = require('path');
+const winston = require('winston');
+const { combine, timestamp, printf, colorize, align } = winston.format;
 
-const logger = (req, res, next) => {
-  const log = `${new Date().toISOString()} - ${req.method} ${req.url}\n`;
-  const logPath = path.join(__dirname, '../../logs/requests.log');
-  
-  fs.appendFile(logPath, log, (err) => {
-    if (err) console.error('Error writing to log file:', err);
-  });
-  
-  console.log(`${req.method} ${req.protocol}://${req.get('host')}${req.originalUrl}`);
-  next();
-};
+const logger = winston.createLogger({
+  level: 'info',
+  format: combine(
+    colorize({ all: true }),
+    timestamp({
+      format: 'YYYY-MM-DD hh:mm:ss.SSS A',
+    }),
+    align(),
+    printf((info) => `[${info.timestamp}] ${info.level}: ${info.message}`)
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'logs/error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'logs/combined.log' }),
+  ],
+});
 
 module.exports = logger;

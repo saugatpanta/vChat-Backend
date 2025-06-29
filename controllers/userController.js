@@ -1,10 +1,10 @@
 const User = require('../models/User');
-const ErrorResponse = require('../utils/errorResponse');
-const { upload } = require('../config/cloudinary');
+const logger = require('../middlewares/logger');
+const { uploadToCloudinary, deleteFromCloudinary } = require('../config/cloudinary');
 
 // @desc    Get all users
 // @route   GET /api/users
-// @access  Private
+// @access  Private/Admin
 exports.getUsers = async (req, res, next) => {
   try {
     const users = await User.find().select('-password');
@@ -12,10 +12,11 @@ exports.getUsers = async (req, res, next) => {
     res.status(200).json({
       success: true,
       count: users.length,
-      data: users
+      users,
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    logger.error(`User Controller - Get Users Error: ${error.message}`);
+    next(error);
   }
 };
 
@@ -27,208 +28,245 @@ exports.getUser = async (req, res, next) => {
     const user = await User.findById(req.params.id).select('-password');
 
     if (!user) {
-      return next(
-        new ErrorResponse(`User not found with id of ${req.params.id}`, 404)
-      );
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
     }
 
     res.status(200).json({
       success: true,
-      data: user
+      user,
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    logger.error(`User Controller - Get User Error: ${error.message}`);
+    next(error);
   }
 };
 
-// @desc    Update user
-// @route   PUT /api/users/:id
+// @desc    Update user profile
+// @route   PUT /api/users/profile
 // @access  Private
-exports.updateUser = async (req, res, next) => {
+exports.updateProfile = async (req, res, next) => {
   try {
-    // Check if user is updating their own profile
-    if (req.params.id !== req.user.id) {
-      return next(new ErrorResponse('Not authorized to update this user', 401));
-    }
+    const { username, bio, phone } = req.body;
+    const userId = req.user.id;
 
-    const fieldsToUpdate = {
-      username: req.body.username,
-      email: req.body.email,
-      bio: req.body.bio
+    const updateFields = {
+      username,
+      bio,
+      phone,
     };
 
-    const user = await User.findByIdAndUpdate(req.params.id, fieldsToUpdate, {
+    // Handle profile photo upload
+    if (req.files && req.files.profilePhoto) {
+      const user = await User.findById(userId);
+
+      // Delete old photo if exists
+      if (user.profilePhoto && user.profilePhoto.publicId) {
+        await deleteFromCloudinary(user.profilePhoto.publicId);
+      }
+
+      // Upload new photo
+      const file = req.files.profilePhoto;
+      const result = await uploadToCloudinary(file.tempFilePath, 'vchat/profiles');
+
+      updateFields.profilePhoto = {
+        url: result.url,
+        publicId: result.public_id,
+      };
+    }
+
+    const updatedUser = await User.findByIdAndUpdate(userId, updateFields, {
       new: true,
-      runValidators: true
+      runValidators: true,
     }).select('-password');
 
     res.status(200).json({
       success: true,
-      data: user
+      user: updatedUser,
     });
-  } catch (err) {
-    next(err);
-  }
-};
-
-// @desc    Upload profile picture
-// @route   PUT /api/users/:id/photo
-// @access  Private
-exports.uploadPhoto = async (req, res, next) => {
-  try {
-    // Check if user is updating their own profile
-    if (req.params.id !== req.user.id) {
-      return next(new ErrorResponse('Not authorized to update this user', 401));
-    }
-
-    const user = await User.findById(req.params.id);
-
-    if (!user) {
-      return next(new ErrorResponse(`User not found with id of ${req.params.id}`, 404));
-    }
-
-    if (!req.file) {
-      return next(new ErrorResponse('Please upload a file', 400));
-    }
-
-    // Delete old photo if not default
-    if (user.profilePicture !== 'default.jpg') {
-      const publicId = user.profilePicture.split('/').pop().split('.')[0];
-      await cloudinary.uploader.destroy(`vchat/${publicId}`);
-    }
-
-    user.profilePicture = req.file.path;
-    await user.save();
-
-    res.status(200).json({
-      success: true,
-      data: user
-    });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    logger.error(`User Controller - Update Profile Error: ${error.message}`);
+    next(error);
   }
 };
 
 // @desc    Follow user
-// @route   PUT /api/users/:id/follow
+// @route   PUT /api/users/follow/:id
 // @access  Private
 exports.followUser = async (req, res, next) => {
   try {
-    if (req.params.id === req.user.id) {
-      return next(new ErrorResponse('You cannot follow yourself', 400));
-    }
-
     const userToFollow = await User.findById(req.params.id);
     const currentUser = await User.findById(req.user.id);
 
-    if (!userToFollow || !currentUser) {
-      return next(new ErrorResponse('User not found', 404));
+    if (!userToFollow) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
     }
 
     // Check if already following
-    if (currentUser.following.includes(req.params.id)) {
-      return next(new ErrorResponse('You are already following this user', 400));
+    if (
+      currentUser.following.some(
+        user => user._id.toString() === userToFollow._id.toString()
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Already following this user',
+      });
     }
 
-    currentUser.following.push(req.params.id);
-    userToFollow.followers.push(req.user.id);
-
+    // Add to following list
+    currentUser.following.push(userToFollow._id);
     await currentUser.save();
+
+    // Add to followers list
+    userToFollow.followers.push(currentUser._id);
     await userToFollow.save();
 
     res.status(200).json({
       success: true,
-      data: {}
+      message: 'User followed successfully',
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    logger.error(`User Controller - Follow User Error: ${error.message}`);
+    next(error);
   }
 };
 
 // @desc    Unfollow user
-// @route   PUT /api/users/:id/unfollow
+// @route   PUT /api/users/unfollow/:id
 // @access  Private
 exports.unfollowUser = async (req, res, next) => {
   try {
-    if (req.params.id === req.user.id) {
-      return next(new ErrorResponse('You cannot unfollow yourself', 400));
-    }
-
     const userToUnfollow = await User.findById(req.params.id);
     const currentUser = await User.findById(req.user.id);
 
-    if (!userToUnfollow || !currentUser) {
-      return next(new ErrorResponse('User not found', 404));
+    if (!userToUnfollow) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
     }
 
     // Check if not following
-    if (!currentUser.following.includes(req.params.id)) {
-      return next(new ErrorResponse('You are not following this user', 400));
+    if (
+      !currentUser.following.some(
+        user => user._id.toString() === userToUnfollow._id.toString()
+      )
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Not following this user',
+      });
     }
 
+    // Remove from following list
     currentUser.following = currentUser.following.filter(
-      id => id.toString() !== req.params.id
+      user => user._id.toString() !== userToUnfollow._id.toString()
     );
-    userToUnfollow.followers = userToUnfollow.followers.filter(
-      id => id.toString() !== req.user.id
-    );
-
     await currentUser.save();
+
+    // Remove from followers list
+    userToUnfollow.followers = userToUnfollow.followers.filter(
+      user => user._id.toString() !== currentUser._id.toString()
+    );
     await userToUnfollow.save();
 
     res.status(200).json({
       success: true,
-      data: {}
+      message: 'User unfollowed successfully',
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    logger.error(`User Controller - Unfollow User Error: ${error.message}`);
+    next(error);
   }
 };
 
-// @desc    Get followers
-// @route   GET /api/users/:id/followers
+// @desc    Get user's followers
+// @route   GET /api/users/followers/:id
 // @access  Private
 exports.getFollowers = async (req, res, next) => {
   try {
-    const user = await User.findById(req.params.id).populate(
-      'followers',
-      'username profilePicture'
-    );
+    const user = await User.findById(req.params.id)
+      .select('followers')
+      .populate('followers', 'username profilePhoto');
 
     if (!user) {
-      return next(new ErrorResponse('User not found', 404));
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
     }
 
     res.status(200).json({
       success: true,
       count: user.followers.length,
-      data: user.followers
+      followers: user.followers,
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    logger.error(`User Controller - Get Followers Error: ${error.message}`);
+    next(error);
   }
 };
 
-// @desc    Get following
-// @route   GET /api/users/:id/following
+// @desc    Get user's following
+// @route   GET /api/users/following/:id
 // @access  Private
 exports.getFollowing = async (req, res, next) => {
   try {
-    const user = await User.findById(req.params.id).populate(
-      'following',
-      'username profilePicture'
-    );
+    const user = await User.findById(req.params.id)
+      .select('following')
+      .populate('following', 'username profilePhoto');
 
     if (!user) {
-      return next(new ErrorResponse('User not found', 404));
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
     }
 
     res.status(200).json({
       success: true,
       count: user.following.length,
-      data: user.following
+      following: user.following,
     });
-  } catch (err) {
-    next(err);
+  } catch (error) {
+    logger.error(`User Controller - Get Following Error: ${error.message}`);
+    next(error);
+  }
+};
+
+// @desc    Delete user account
+// @route   DELETE /api/users
+// @access  Private
+exports.deleteAccount = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.user.id);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    // Delete profile photo if exists
+    if (user.profilePhoto && user.profilePhoto.publicId) {
+      await deleteFromCloudinary(user.profilePhoto.publicId);
+    }
+
+    await user.remove();
+
+    res.status(200).json({
+      success: true,
+      message: 'Account deleted successfully',
+    });
+  } catch (error) {
+    logger.error(`User Controller - Delete Account Error: ${error.message}`);
+    next(error);
   }
 };

@@ -1,26 +1,31 @@
 const express = require('express');
+const router = express.Router();
 const {
-  getOrCreateConversation,
+  startConversation,
   getConversations,
-  getMessages,
+  getConversation,
   sendMessage,
+  getMessages,
   deleteMessage,
-  createGroup,
-  updateGroup
+  searchUsers,
+  updateStatus,
 } = require('../controllers/chatController');
 const { protect } = require('../middlewares/auth');
-const { upload } = require('../config/cloudinary');
+const upload = require('../services/fileUpload');
 
-const router = express.Router();
+router.route('/conversations')
+  .post(protect, startConversation)
+  .get(protect, getConversations);
 
-router.use(protect);
+router.get('/conversations/:id', protect, getConversation);
 
-router.post('/conversations', getOrCreateConversation);
-router.get('/conversations', getConversations);
-router.get('/messages/:conversationId', getMessages);
-router.post('/messages', upload.array('media', 10), sendMessage);
-router.delete('/messages/:messageId', deleteMessage);
-router.post('/groups', createGroup);
-router.put('/groups/:groupId', updateGroup);
+router.route('/messages')
+  .post(protect, upload.single('file'), sendMessage);
+
+router.get('/messages/:conversationId', protect, getMessages);
+router.delete('/messages/:id', protect, deleteMessage);
+
+router.get('/search', protect, searchUsers);
+router.put('/status', protect, updateStatus);
 
 module.exports = router;

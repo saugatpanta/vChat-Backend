@@ -2,54 +2,43 @@ const mongoose = require('mongoose');
 
 const MessageSchema = new mongoose.Schema({
   conversation: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: mongoose.Schema.ObjectId,
     ref: 'Conversation',
-    required: true
+    required: true,
   },
   sender: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: mongoose.Schema.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
   },
-  recipient: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  text: {
-    type: String
-  },
-  media: [{
-    url: String,
-    type: {
-      type: String,
-      enum: ['image', 'video', 'audio', 'file']
-    }
-  }],
-  read: {
-    type: Boolean,
-    default: false
-  },
-  reactions: [{
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+  content: {
+    type: String,
+    required: function () {
+      return !this.media; // Content is required if there's no media
     },
-    type: {
-      type: String,
-      enum: ['like', 'love', 'haha', 'wow', 'sad', 'angry']
-    }
-  }],
-  deletedFor: [{
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  }],
+  },
+  type: {
+    type: String,
+    enum: ['text', 'image', 'video', 'audio', 'file'],
+    default: 'text',
+  },
+  media: {
+    url: String,
+    publicId: String,
+  },
+  readBy: [
+    {
+      type: mongoose.Schema.ObjectId,
+      ref: 'User',
+    },
+  ],
   createdAt: {
     type: Date,
-    default: Date.now
-  }
-}, {
-  timestamps: true
+    default: Date.now,
+  },
 });
+
+// Add text index for search functionality
+MessageSchema.index({ content: 'text' });
 
 module.exports = mongoose.model('Message', MessageSchema);
