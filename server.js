@@ -16,6 +16,9 @@ const connectDB = require('./config/db');
 const logger = require('./middlewares/logger');
 const errorHandler = require('./middlewares/error');
 const configureSocket = require('./services/socket');
+const fs = require('fs');
+const path = require('path');
+
 
 // Load env vars
 dotenv.config({ path: './.env' });
@@ -93,6 +96,8 @@ app.use('/api/users', users);
 app.use('/api/chat', chat);
 app.use('/api/stories', stories);
 
+
+
 // Error handler middleware
 app.use(errorHandler);
 
@@ -103,6 +108,11 @@ server.listen(PORT, () => {
     `Server running in ${process.env.NODE_ENV} mode on port ${PORT}`.yellow.bold
   );
 });
+
+const tmpDir = path.join(__dirname, 'tmp');
+if (!fs.existsSync(tmpDir)) {
+  fs.mkdirSync(tmpDir);
+}
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err, promise) => {
