@@ -3,14 +3,22 @@
   "version": "1.0.0",
   "description": "Backend for vChat social media application",
   "main": "server.js",
+  "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
     "build": "echo 'Building...'",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest --watchAll --verbose",
+    "lint": "eslint .",
+    "prepare": "husky install"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "social",
+    "chat",
+    "messaging",
+    "nodejs",
+    "mongodb"
+  ],
   "license": "ISC",
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -35,6 +43,16 @@
     "xss-clean": "^0.1.1"
   },
   "devDependencies": {
-    "nodemon": "^2.0.22"
+    "eslint": "^8.40.0",
+    "eslint-config-airbnb-base": "^15.0.0",
+    "eslint-plugin-import": "^2.27.5",
+    "husky": "^8.0.3",
+    "jest": "^29.5.0",
+    "nodemon": "^2.0.22",
+    "supertest": "^6.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   }
 }
