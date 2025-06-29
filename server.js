@@ -5,7 +5,6 @@ const morgan = require('morgan');
 const colors = require('colors');
 const cors = require('cors');
 const helmet = require('helmet');
-const xss = require('xss-clean');
 const rateLimit = require('express-rate-limit');
 const hpp = require('hpp');
 const mongoSanitize = require('express-mongo-sanitize');
@@ -60,9 +59,10 @@ if (process.env.NODE_ENV === 'development') {
 // Sanitize data
 app.use(mongoSanitize());
 
-// Set security headers
-app.use(helmet());
-
+// Security middleware
+app.use(helmet()); // Security headers
+app.use(mongoSanitize()); // Sanitize data against NoSQL injection
+app.use(hpp()); // Prevent HTTP Parameter Pollution
 // Prevent XSS attacks
 app.use(xss());
 
