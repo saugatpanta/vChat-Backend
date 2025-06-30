@@ -1,303 +1,296 @@
 const User = require('../models/User');
-const ErrorResponse = require('../utils/ErrorResponse');
-const asyncHandler = require('../middlewares/async');
+const jwt = require('jsonwebtoken');
+const asyncHandler = require('express-async-handler');
+const { StatusCodes } = require('http-status-codes');
+const validator = require('validator');
+const logger = require('../middlewares/logger');
 const sendEmail = require('../services/emailService');
-const { generateToken, verifyToken } = require('../utils/helpers');
 
-// @desc    Register user
-// @route   POST /api/v1/auth/register
+// @desc    Register a new user
+// @route   POST /api/auth/register
 // @access  Public
-exports.register = asyncHandler(async (req, res, next) => {
-  const { name, email, password, username } = req.body;
+const register = asyncHandler(async (req, res) => {
+  const { username, email, password } = req.body;
+
+  // Validation
+  if (!username || !email || !password) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Please provide all required fields');
+  }
+
+  if (!validator.isEmail(email)) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Please provide a valid email');
+  }
+
+  if (password.length < 6) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Password must be at least 6 characters');
+  }
+
+  // Check if user exists
+  const userExists = await User.findOne({ email });
+  if (userExists) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('User already exists');
+  }
+
+  const usernameExists = await User.findOne({ username });
+  if (usernameExists) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Username is already taken');
+  }
 
   // Create user
   const user = await User.create({
-    name,
+    username,
     email,
     password,
-    username
   });
 
-  // Generate token
-  const token = generateToken(user._id);
+  if (user) {
+    // Generate token
+    const token = user.generateAuthToken();
 
-  // Set cookie
-  res.cookie('token', token, {
-    expires: new Date(Date.now() + process.env.JWT_COOKIE_EXPIRE * 24 * 60 * 60 * 1000),
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict'
-  });
+    // Set cookie
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    });
 
-  res.status(201).json({
-    success: true,
-    token,
-    user: {
+    logger.info(`New user registered: ${user.email}`);
+
+    res.status(StatusCodes.CREATED).json({
       _id: user._id,
-      name: user.name,
-      email: user.email,
       username: user.username,
-      avatar: user.avatar,
-      verified: user.verified
-    }
-  });
+      email: user.email,
+      profilePicture: user.profilePicture,
+      token,
+    });
+  } else {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Invalid user data');
+  }
 });
 
 // @desc    Login user
-// @route   POST /api/v1/auth/login
+// @route   POST /api/auth/login
 // @access  Public
-exports.login = asyncHandler(async (req, res, next) => {
+const login = asyncHandler(async (req, res) => {
   const { email, password } = req.body;
 
-  // Validate email & password
+  // Validation
   if (!email || !password) {
-    return next(new ErrorResponse('Please provide an email and password', 400));
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Please provide email and password');
   }
 
   // Check for user
   const user = await User.findOne({ email }).select('+password');
-
   if (!user) {
-    return next(new ErrorResponse('Invalid credentials', 401));
+    res.status(StatusCodes.UNAUTHORIZED);
+    throw new Error('Invalid credentials');
   }
 
   // Check if password matches
-  const isMatch = await user.matchPassword(password);
-
+  const isMatch = await user.comparePassword(password);
   if (!isMatch) {
-    return next(new ErrorResponse('Invalid credentials', 401));
+    res.status(StatusCodes.UNAUTHORIZED);
+    throw new Error('Invalid credentials');
   }
 
   // Generate token
-  const token = generateToken(user._id);
+  const token = user.generateAuthToken();
 
   // Set cookie
   res.cookie('token', token, {
-    expires: new Date(Date.now() + process.env.JWT_COOKIE_EXPIRE * 24 * 60 * 60 * 1000),
     httpOnly: true,
     secure: process.env.NODE_ENV === 'production',
-    sameSite: 'strict'
+    sameSite: 'strict',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
   });
 
-  res.status(200).json({
-    success: true,
+  logger.info(`User logged in: ${user.email}`);
+
+  res.status(StatusCodes.OK).json({
+    _id: user._id,
+    username: user.username,
+    email: user.email,
+    profilePicture: user.profilePicture,
     token,
-    user: {
-      _id: user._id,
-      name: user.name,
-      email: user.email,
-      username: user.username,
-      avatar: user.avatar,
-      verified: user.verified
-    }
   });
 });
 
 // @desc    Logout user / clear cookie
-// @route   GET /api/v1/auth/logout
+// @route   POST /api/auth/logout
 // @access  Private
-exports.logout = asyncHandler(async (req, res, next) => {
-  res.cookie('token', 'none', {
-    expires: new Date(Date.now() + 10 * 1000),
-    httpOnly: true
+const logout = asyncHandler(async (req, res) => {
+  res.cookie('token', '', {
+    httpOnly: true,
+    expires: new Date(0),
   });
 
-  res.status(200).json({
-    success: true,
-    data: {}
-  });
+  logger.info(`User logged out: ${req.user.email}`);
+
+  res.status(StatusCodes.OK).json({ message: 'Logged out successfully' });
 });
 
-// @desc    Get current logged in user
-// @route   GET /api/v1/auth/me
+// @desc    Get user profile
+// @route   GET /api/auth/profile
 // @access  Private
-exports.getMe = asyncHandler(async (req, res, next) => {
-  const user = await User.findById(req.user.id);
+const getProfile = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id).select('-password');
 
-  res.status(200).json({
-    success: true,
-    data: user
-  });
-});
-
-// @desc    Update user details
-// @route   PUT /api/v1/auth/updatedetails
-// @access  Private
-exports.updateDetails = asyncHandler(async (req, res, next) => {
-  const fieldsToUpdate = {
-    name: req.body.name,
-    email: req.body.email,
-    username: req.body.username
-  };
-
-  const user = await User.findByIdAndUpdate(req.user.id, fieldsToUpdate, {
-    new: true,
-    runValidators: true
-  });
-
-  res.status(200).json({
-    success: true,
-    data: user
-  });
-});
-
-// @desc    Update password
-// @route   PUT /api/v1/auth/updatepassword
-// @access  Private
-exports.updatePassword = asyncHandler(async (req, res, next) => {
-  const user = await User.findById(req.user.id).select('+password');
-
-  // Check current password
-  if (!(await user.matchPassword(req.body.currentPassword))) {
-    return next(new ErrorResponse('Password is incorrect', 401));
+  if (!user) {
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('User not found');
   }
 
-  user.password = req.body.newPassword;
-  await user.save();
+  res.status(StatusCodes.OK).json(user);
+});
 
-  // Generate token
-  const token = generateToken(user._id);
+// @desc    Update user profile
+// @route   PUT /api/auth/profile
+// @access  Private
+const updateProfile = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user._id);
 
-  res.status(200).json({
-    success: true,
-    token,
-    data: user
+  if (!user) {
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('User not found');
+  }
+
+  const { username, bio } = req.body;
+
+  if (username) {
+    const usernameExists = await User.findOne({ username });
+    if (usernameExists && usernameExists._id.toString() !== user._id.toString()) {
+      res.status(StatusCodes.BAD_REQUEST);
+      throw new Error('Username is already taken');
+    }
+    user.username = username;
+  }
+
+  if (bio) {
+    user.bio = bio;
+  }
+
+  const updatedUser = await user.save();
+
+  res.status(StatusCodes.OK).json({
+    _id: updatedUser._id,
+    username: updatedUser.username,
+    email: updatedUser.email,
+    profilePicture: updatedUser.profilePicture,
+    bio: updatedUser.bio,
   });
 });
 
 // @desc    Forgot password
-// @route   POST /api/v1/auth/forgotpassword
+// @route   POST /api/auth/forgot-password
 // @access  Public
-exports.forgotPassword = asyncHandler(async (req, res, next) => {
-  const user = await User.findOne({ email: req.body.email });
+const forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
 
-  if (!user) {
-    return next(new ErrorResponse('There is no user with that email', 404));
+  if (!email) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Please provide email');
   }
 
-  // Get reset token
-  const resetToken = user.getResetPasswordToken();
+  const user = await User.findOne({ email });
 
-  await user.save({ validateBeforeSave: false });
+  if (!user) {
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('User not found');
+  }
+
+  // Generate reset token
+  const resetToken = jwt.sign(
+    { id: user._id },
+    process.env.JWT_RESET_SECRET,
+    { expiresIn: '10m' }
+  );
 
   // Create reset URL
-  const resetUrl = `${req.protocol}://${req.get('host')}/api/v1/auth/resetpassword/${resetToken}`;
+  const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
 
-  const message = `You are receiving this email because you (or someone else) has requested the reset of a password. Please make a PUT request to: \n\n ${resetUrl}`;
+  // Send email
+  const message = `
+    <h2>Hello ${user.username}</h2>
+    <p>Please use the link below to reset your password</p>
+    <p>This reset link is valid for only 10 minutes</p>
+    <a href=${resetUrl} clicktracking=off>${resetUrl}</a>
+    <p>Regards,</p>
+    <p>vChat Team</p>
+  `;
 
   try {
     await sendEmail({
-      email: user.email,
-      subject: 'Password reset token',
-      message
+      to: user.email,
+      subject: 'Password Reset Request',
+      html: message,
     });
 
-    res.status(200).json({ success: true, data: 'Email sent' });
-  } catch (err) {
-    console.log(err);
+    res.status(StatusCodes.OK).json({
+      success: true,
+      message: 'Password reset email sent',
+    });
+  } catch (error) {
     user.resetPasswordToken = undefined;
     user.resetPasswordExpire = undefined;
+    await user.save();
 
-    await user.save({ validateBeforeSave: false });
-
-    return next(new ErrorResponse('Email could not be sent', 500));
+    res.status(StatusCodes.INTERNAL_SERVER_ERROR);
+    throw new Error('Email could not be sent');
   }
 });
 
 // @desc    Reset password
-// @route   PUT /api/v1/auth/resetpassword/:resettoken
+// @route   PUT /api/auth/reset-password/:resetToken
 // @access  Public
-exports.resetPassword = asyncHandler(async (req, res, next) => {
-  // Get hashed token
-  const resetPasswordToken = crypto
-    .createHash('sha256')
-    .update(req.params.resettoken)
-    .digest('hex');
+const resetPassword = asyncHandler(async (req, res) => {
+  const { resetToken } = req.params;
+  const { password } = req.body;
 
-  const user = await User.findOne({
-    resetPasswordToken,
-    resetPasswordExpire: { $gt: Date.now() }
-  });
-
-  if (!user) {
-    return next(new ErrorResponse('Invalid token', 400));
+  if (!password) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Please provide a password');
   }
-
-  // Set new password
-  user.password = req.body.password;
-  user.resetPasswordToken = undefined;
-  user.resetPasswordExpire = undefined;
-  await user.save();
-
-  // Generate token
-  const token = generateToken(user._id);
-
-  res.status(200).json({
-    success: true,
-    token,
-    data: user
-  });
-});
-
-// @desc    Verify email
-// @route   GET /api/v1/auth/verifyemail/:verificationtoken
-// @access  Public
-exports.verifyEmail = asyncHandler(async (req, res, next) => {
-  const verificationToken = req.params.verificationtoken;
-
-  const user = await User.findOne({ verificationToken });
-
-  if (!user) {
-    return next(new ErrorResponse('Invalid token', 400));
-  }
-
-  user.verified = true;
-  user.verificationToken = undefined;
-  await user.save();
-
-  // Generate token
-  const token = generateToken(user._id);
-
-  res.status(200).json({
-    success: true,
-    token,
-    data: user
-  });
-});
-
-// @desc    Send verification email
-// @route   POST /api/v1/auth/sendverificationemail
-// @access  Private
-exports.sendVerificationEmail = asyncHandler(async (req, res, next) => {
-  const user = await User.findById(req.user.id);
-
-  if (user.verified) {
-    return next(new ErrorResponse('Email already verified', 400));
-  }
-
-  const verificationToken = user.getVerificationToken();
-
-  await user.save({ validateBeforeSave: false });
-
-  // Create verification URL
-  const verificationUrl = `${req.protocol}://${req.get('host')}/api/v1/auth/verifyemail/${verificationToken}`;
-
-  const message = `Please click the following link to verify your email: \n\n ${verificationUrl}`;
 
   try {
-    await sendEmail({
-      email: user.email,
-      subject: 'Email verification',
-      message
+    // Verify token
+    const decoded = jwt.verify(resetToken, process.env.JWT_RESET_SECRET);
+
+    // Get user
+    const user = await User.findById(decoded.id);
+
+    if (!user) {
+      res.status(StatusCodes.NOT_FOUND);
+      throw new Error('User not found');
+    }
+
+    // Set new password
+    user.password = password;
+    await user.save();
+
+    res.status(StatusCodes.OK).json({
+      success: true,
+      message: 'Password updated successfully',
     });
-
-    res.status(200).json({ success: true, data: 'Email sent' });
-  } catch (err) {
-    console.log(err);
-    user.verificationToken = undefined;
-
-    await user.save({ validateBeforeSave: false });
-
-    return next(new ErrorResponse('Email could not be sent', 500));
+  } catch (error) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Invalid or expired token');
   }
 });
+
+module.exports = {
+  register,
+  login,
+  logout,
+  getProfile,
+  updateProfile,
+  forgotPassword,
+  resetPassword,
+};

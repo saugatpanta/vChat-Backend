@@ -1,40 +1,29 @@
-const cloudinary = require('cloudinary').v2;
-const fs = require('fs');
-const { promisify } = require('util');
-const writeFileAsync = promisify(fs.writeFile);
-const unlinkAsync = promisify(fs.unlink);
+const multer = require('multer');
+const { storage } = require('../config/cloudinary');
+const { StatusCodes } = require('http-status-codes');
 
-exports.uploadFile = async (file, folder = 'vchat') => {
-  try {
-    // Write the buffer to a temporary file
-    const tempFilePath = `/tmp/${Date.now()}-${file.originalname}`;
-    await writeFileAsync(tempFilePath, file.buffer);
+const upload = multer({
+  storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'image/jpeg',
+      'image/png',
+      'image/gif',
+      'video/mp4',
+      'video/quicktime',
+    ];
 
-    // Upload to Cloudinary
-    const result = await cloudinary.uploader.upload(tempFilePath, {
-      folder,
-      resource_type: 'auto'
-    });
+    if (!allowedTypes.includes(file.mimetype)) {
+      const error = new Error('Invalid file type');
+      error.statusCode = StatusCodes.BAD_REQUEST;
+      return cb(error, false);
+    }
 
-    // Delete the temporary file
-    await unlinkAsync(tempFilePath);
+    cb(null, true);
+  },
+});
 
-    return {
-      url: result.secure_url,
-      publicId: result.public_id,
-      resourceType: result.resource_type
-    };
-  } catch (err) {
-    console.error('Error uploading file:', err);
-    throw err;
-  }
-};
-
-exports.deleteFile = async (publicId) => {
-  try {
-    await cloudinary.uploader.destroy(publicId);
-  } catch (err) {
-    console.error('Error deleting file:', err);
-    throw err;
-  }
-};
+module.exports = upload;

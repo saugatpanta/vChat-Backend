@@ -1,24 +1,13 @@
 const express = require('express');
-const {
-  createStory,
-  getStories,
-  getMyStories,
-  getStory,
-  deleteStory,
-  getStoryViewers
-} = require('../controllers/storyController');
-const { protect } = require('../middlewares/auth');
-const { upload } = require('../config/cloudinary');
-
 const router = express.Router();
+const storyController = require('../controllers/storyController');
+const { protect } = require('../middlewares/auth');
+const upload = require('../services/fileUpload');
 
-router.use(protect);
-
-router.post('/', upload.single('media'), createStory);
-router.get('/', getStories);
-router.get('/me', getMyStories);
-router.get('/:id', getStory);
-router.delete('/:id', deleteStory);
-router.get('/:id/viewers', getStoryViewers);
+router.post('/', protect, upload.single('media'), storyController.createStory);
+router.get('/', protect, storyController.getStories);
+router.get('/me', protect, storyController.getMyStories);
+router.get('/:storyId', protect, storyController.getStory);
+router.delete('/:storyId', protect, storyController.deleteStory);
 
 module.exports = router;

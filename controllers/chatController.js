@@ -1,329 +1,331 @@
+const asyncHandler = require('express-async-handler');
+const { StatusCodes } = require('http-status-codes');
+const User = require('../models/User');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
-const User = require('../models/User');
-const ErrorResponse = require('../utils/ErrorResponse');
-const asyncHandler = require('../middlewares/async');
+const logger = require('../middlewares/logger');
 
 // @desc    Get all conversations for a user
-// @route   GET /api/v1/chat/conversations
+// @route   GET /api/chat/conversations
 // @access  Private
-exports.getConversations = asyncHandler(async (req, res, next) => {
+const getConversations = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+
   const conversations = await Conversation.find({
-    participants: { $in: [req.user.id] }
+    participants: { $in: [userId] },
   })
-    .populate('participants', 'name username avatar')
+    .populate('participants', 'username profilePicture isOnline')
     .populate('lastMessage')
     .sort('-updatedAt');
 
-  res.status(200).json({
-    success: true,
-    count: conversations.length,
-    data: conversations
-  });
+  res.status(StatusCodes.OK).json(conversations);
 });
 
-// @desc    Get or create conversation
-// @route   GET /api/v1/chat/conversations/:userId
+// @desc    Get or create a conversation
+// @route   POST /api/chat/conversations
 // @access  Private
-exports.getOrCreateConversation = asyncHandler(async (req, res, next) => {
-  const { userId } = req.params;
+const createConversation = asyncHandler(async (req, res) => {
+  const { participantId } = req.body;
+  const userId = req.user._id;
 
-  // Check if user exists
-  const user = await User.findById(userId);
-  if (!user) {
-    return next(new ErrorResponse(`User not found with id of ${userId}`, 404));
+  if (!participantId) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Please provide participant ID');
+  }
+
+  if (participantId === userId.toString()) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Cannot create conversation with yourself');
   }
 
   // Check if conversation already exists
   let conversation = await Conversation.findOne({
-    participants: { $all: [req.user.id, userId] },
-    isGroup: false
+    participants: { $all: [userId, participantId], $size: 2 },
+    isGroup: false,
   })
-    .populate('participants', 'name username avatar')
+    .populate('participants', 'username profilePicture isOnline')
     .populate('lastMessage');
 
-  // If conversation doesn't exist, create it
   if (!conversation) {
+    // Create new conversation
     conversation = await Conversation.create({
-      participants: [req.user.id, userId],
-      isGroup: false
+      participants: [userId, participantId],
     });
 
     conversation = await Conversation.findById(conversation._id)
-      .populate('participants', 'name username avatar')
-      .populate('lastMessage');
+      .populate('participants', 'username profilePicture isOnline');
   }
 
-  res.status(200).json({
-    success: true,
-    data: conversation
+  res.status(StatusCodes.OK).json(conversation);
+});
+
+// @desc    Create a group conversation
+// @route   POST /api/chat/conversations/group
+// @access  Private
+const createGroupConversation = asyncHandler(async (req, res) => {
+  const { name, participants } = req.body;
+  const userId = req.user._id;
+
+  if (!name || !participants || participants.length < 2) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Please provide group name and at least 2 participants');
+  }
+
+  // Add current user to participants if not already included
+  if (!participants.includes(userId.toString())) {
+    participants.push(userId.toString());
+  }
+
+  // Check for duplicate participants
+  const uniqueParticipants = [...new Set(participants)];
+
+  const conversation = await Conversation.create({
+    participants: uniqueParticipants,
+    isGroup: true,
+    groupName: name,
+    groupAdmin: userId,
   });
+
+  const populatedConversation = await Conversation.findById(conversation._id)
+    .populate('participants', 'username profilePicture isOnline');
+
+  res.status(StatusCodes.CREATED).json(populatedConversation);
 });
 
 // @desc    Get messages for a conversation
-// @route   GET /api/v1/chat/conversations/:conversationId/messages
+// @route   GET /api/chat/conversations/:conversationId/messages
 // @access  Private
-exports.getMessages = asyncHandler(async (req, res, next) => {
+const getMessages = asyncHandler(async (req, res) => {
   const { conversationId } = req.params;
+  const userId = req.user._id;
 
-  // Check if conversation exists and user is a participant
+  // Check if user is part of the conversation
   const conversation = await Conversation.findOne({
     _id: conversationId,
-    participants: { $in: [req.user.id] }
+    participants: { $in: [userId] },
   });
 
   if (!conversation) {
-    return next(new ErrorResponse(`Conversation not found with id of ${conversationId}`, 404));
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('Conversation not found');
   }
 
   const messages = await Message.find({
-    conversation: conversationId
+    conversation: conversationId,
+    deletedFor: { $ne: userId },
   })
-    .populate('sender', 'name username avatar')
-    .sort('createdAt');
+    .sort('createdAt')
+    .populate('sender', 'username profilePicture');
 
-  res.status(200).json({
-    success: true,
-    count: messages.length,
-    data: messages
-  });
+  // Mark messages as read
+  await Message.updateMany(
+    {
+      conversation: conversationId,
+      recipient: userId,
+      isRead: false,
+    },
+    { $set: { isRead: true, readAt: Date.now() } }
+  );
+
+  res.status(StatusCodes.OK).json(messages);
 });
 
-// @desc    Send message
-// @route   POST /api/v1/chat/conversations/:conversationId/messages
+// @desc    Send a message
+// @route   POST /api/chat/conversations/:conversationId/messages
 // @access  Private
-exports.sendMessage = asyncHandler(async (req, res, next) => {
+const sendMessage = asyncHandler(async (req, res) => {
   const { conversationId } = req.params;
-  const { content, type } = req.body;
+  const { text, media } = req.body;
+  const userId = req.user._id;
 
-  // Check if conversation exists and user is a participant
-  const conversation = await Conversation.findOne({
-    _id: conversationId,
-    participants: { $in: [req.user.id] }
-  });
-
-  if (!conversation) {
-    return next(new ErrorResponse(`Conversation not found with id of ${conversationId}`, 404));
+  if (!text && (!media || media.length === 0)) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Please provide message text or media');
   }
 
-  // Create message
+  // Check if user is part of the conversation
+  const conversation = await Conversation.findOne({
+    _id: conversationId,
+    participants: { $in: [userId] },
+  }).populate('participants', '_id');
+
+  if (!conversation) {
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('Conversation not found');
+  }
+
+  // Get recipient (for 1:1 chat)
+  let recipientId;
+  if (!conversation.isGroup) {
+    recipientId = conversation.participants.find(
+      (participant) => participant._id.toString() !== userId.toString()
+    )._id;
+  }
+
   const message = await Message.create({
     conversation: conversationId,
-    sender: req.user.id,
-    content,
-    type: type || 'text'
+    sender: userId,
+    recipient: recipientId,
+    text,
+    media,
   });
 
   // Update conversation last message
   conversation.lastMessage = message._id;
   await conversation.save();
 
-  // Populate sender and conversation
   const populatedMessage = await Message.findById(message._id)
-    .populate('sender', 'name username avatar')
-    .populate('conversation');
+    .populate('sender', 'username profilePicture');
 
-  // Emit message to socket
+  // Emit socket event
   req.io.to(conversationId).emit('newMessage', populatedMessage);
 
-  res.status(201).json({
-    success: true,
-    data: populatedMessage
-  });
+  res.status(StatusCodes.CREATED).json(populatedMessage);
 });
 
-// @desc    Create group conversation
-// @route   POST /api/v1/chat/conversations/group
+// @desc    Delete a message
+// @route   DELETE /api/chat/messages/:messageId
 // @access  Private
-exports.createGroupConversation = asyncHandler(async (req, res, next) => {
-  const { name, participants } = req.body;
-
-  if (!name || !participants || participants.length < 2) {
-    return next(new ErrorResponse('Please provide name and at least 2 participants', 400));
-  }
-
-  // Add current user to participants if not already included
-  if (!participants.includes(req.user.id.toString())) {
-    participants.push(req.user.id.toString());
-  }
-
-  // Check if all participants exist
-  const users = await User.find({ _id: { $in: participants } });
-  if (users.length !== participants.length) {
-    return next(new ErrorResponse('One or more participants not found', 404));
-  }
-
-  // Create group conversation
-  const conversation = await Conversation.create({
-    participants,
-    isGroup: true,
-    groupName: name,
-    groupAdmin: req.user.id
-  });
-
-  const populatedConversation = await Conversation.findById(conversation._id)
-    .populate('participants', 'name username avatar')
-    .populate('lastMessage');
-
-  // Emit new conversation to all participants
-  participants.forEach(participantId => {
-    req.io.to(participantId.toString()).emit('newConversation', populatedConversation);
-  });
-
-  res.status(201).json({
-    success: true,
-    data: populatedConversation
-  });
-});
-
-// @desc    Update group conversation
-// @route   PUT /api/v1/chat/conversations/group/:conversationId
-// @access  Private
-exports.updateGroupConversation = asyncHandler(async (req, res, next) => {
-  const { conversationId } = req.params;
-  const { name, participants } = req.body;
-
-  // Check if conversation exists and is a group
-  const conversation = await Conversation.findOne({
-    _id: conversationId,
-    isGroup: true,
-    groupAdmin: req.user.id
-  });
-
-  if (!conversation) {
-    return next(new ErrorResponse(`Group conversation not found with id of ${conversationId}`, 404));
-  }
-
-  // Update group name if provided
-  if (name) {
-    conversation.groupName = name;
-  }
-
-  // Update participants if provided
-  if (participants && participants.length > 0) {
-    // Check if all new participants exist
-    const users = await User.find({ _id: { $in: participants } });
-    if (users.length !== participants.length) {
-      return next(new ErrorResponse('One or more participants not found', 404));
-    }
-
-    // Add current user to participants if not already included
-    if (!participants.includes(req.user.id.toString())) {
-      participants.push(req.user.id.toString());
-    }
-
-    conversation.participants = participants;
-  }
-
-  await conversation.save();
-
-  const populatedConversation = await Conversation.findById(conversation._id)
-    .populate('participants', 'name username avatar')
-    .populate('lastMessage');
-
-  // Emit updated conversation to all participants
-  populatedConversation.participants.forEach(participant => {
-    req.io.to(participant._id.toString()).emit('updatedConversation', populatedConversation);
-  });
-
-  res.status(200).json({
-    success: true,
-    data: populatedConversation
-  });
-});
-
-// @desc    Delete message
-// @route   DELETE /api/v1/chat/messages/:messageId
-// @access  Private
-exports.deleteMessage = asyncHandler(async (req, res, next) => {
+const deleteMessage = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
+  const userId = req.user._id;
 
-  const message = await Message.findOne({
-    _id: messageId,
-    sender: req.user.id
-  });
+  const message = await Message.findById(messageId);
 
   if (!message) {
-    return next(new ErrorResponse(`Message not found with id of ${messageId}`, 404));
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('Message not found');
   }
 
-  await message.remove();
+  // Check if user is sender or admin
+  if (
+    message.sender.toString() !== userId.toString() &&
+    !(await Conversation.findOne({
+      _id: message.conversation,
+      isGroup: true,
+      groupAdmin: userId,
+    }))
+  ) {
+    res.status(StatusCodes.UNAUTHORIZED);
+    throw new Error('Not authorized to delete this message');
+  }
 
-  // Emit deleted message to conversation
-  req.io.to(message.conversation.toString()).emit('deletedMessage', messageId);
+  // For everyone or just for me?
+  if (req.query.for === 'me') {
+    // Delete only for me
+    if (!message.deletedFor.includes(userId)) {
+      message.deletedFor.push(userId);
+      await message.save();
+    }
+  } else {
+    // Delete for everyone
+    await Message.deleteOne({ _id: messageId });
+    
+    // Emit socket event
+    req.io.to(message.conversation.toString()).emit('deleteMessage', messageId);
+  }
 
-  res.status(200).json({
-    success: true,
-    data: {}
-  });
+  res.status(StatusCodes.OK).json({ success: true });
 });
 
-// @desc    Start video call
-// @route   POST /api/v1/chat/conversations/:conversationId/call
+// @desc    Start a call
+// @route   POST /api/chat/call
 // @access  Private
-exports.startVideoCall = asyncHandler(async (req, res, next) => {
-  const { conversationId } = req.params;
-  const { type } = req.body; // 'video' or 'audio'
+const startCall = asyncHandler(async (req, res) => {
+  const { conversationId, callType } = req.body;
+  const userId = req.user._id;
 
-  // Check if conversation exists and user is a participant
+  // Check if user is part of the conversation
   const conversation = await Conversation.findOne({
     _id: conversationId,
-    participants: { $in: [req.user.id] }
-  }).populate('participants', 'name username avatar');
+    participants: { $in: [userId] },
+  }).populate('participants', '_id username profilePicture isOnline');
 
   if (!conversation) {
-    return next(new ErrorResponse(`Conversation not found with id of ${conversationId}`, 404));
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('Conversation not found');
   }
 
-  // Create call data
-  const callData = {
+  // Create call message
+  const message = await Message.create({
     conversation: conversationId,
-    caller: req.user.id,
-    type: type || 'video',
-    participants: conversation.participants.map(p => p._id),
-    status: 'calling'
-  };
+    sender: userId,
+    call: {
+      type: callType,
+      status: 'initiated',
+    },
+  });
 
-  // Emit call to other participants
-  conversation.participants.forEach(participant => {
-    if (participant._id.toString() !== req.user.id.toString()) {
-      req.io.to(participant._id.toString()).emit('incomingCall', callData);
+  // Update conversation last message
+  conversation.lastMessage = message._id;
+  await conversation.save();
+
+  const populatedMessage = await Message.findById(message._id)
+    .populate('sender', 'username profilePicture');
+
+  // Emit socket event to participants
+  conversation.participants.forEach((participant) => {
+    if (participant._id.toString() !== userId.toString()) {
+      req.io.to(participant._id.toString()).emit('incomingCall', {
+        conversationId,
+        caller: req.user,
+        callType,
+        message: populatedMessage,
+      });
     }
   });
 
-  res.status(200).json({
-    success: true,
-    data: callData
-  });
+  res.status(StatusCodes.CREATED).json(populatedMessage);
 });
 
-// @desc    End video call
-// @route   POST /api/v1/chat/conversations/:conversationId/call/end
+// @desc    End a call
+// @route   PUT /api/chat/call/:messageId
 // @access  Private
-exports.endVideoCall = asyncHandler(async (req, res, next) => {
-  const { conversationId } = req.params;
-  const { callId } = req.body;
+const endCall = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const { status, duration } = req.body;
+  const userId = req.user._id;
 
-  // Check if conversation exists and user is a participant
-  const conversation = await Conversation.findOne({
-    _id: conversationId,
-    participants: { $in: [req.user.id] }
-  }).populate('participants', 'name username avatar');
+  const message = await Message.findById(messageId);
 
-  if (!conversation) {
-    return next(new ErrorResponse(`Conversation not found with id of ${conversationId}`, 404));
+  if (!message) {
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('Message not found');
   }
 
-  // Emit call ended to all participants
-  conversation.participants.forEach(participant => {
-    req.io.to(participant._id.toString()).emit('callEnded', {
-      callId,
-      endedBy: req.user.id
-    });
+  // Check if user is part of the conversation
+  const conversation = await Conversation.findOne({
+    _id: message.conversation,
+    participants: { $in: [userId] },
   });
 
-  res.status(200).json({
-    success: true,
-    data: {}
+  if (!conversation) {
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('Conversation not found');
+  }
+
+  // Update call status
+  message.call.status = status;
+  message.call.duration = duration;
+  await message.save();
+
+  // Emit socket event to participants
+  req.io.to(message.conversation.toString()).emit('callEnded', {
+    messageId,
+    status,
+    duration,
   });
+
+  res.status(StatusCodes.OK).json({ success: true });
 });
+
+module.exports = {
+  getConversations,
+  createConversation,
+  createGroupConversation,
+  getMessages,
+  sendMessage,
+  deleteMessage,
+  startCall,
+  endCall,
+};

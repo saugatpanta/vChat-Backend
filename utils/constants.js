@@ -1,9 +1,12 @@
 module.exports = {
   USER_STATUS: {
-    ONLINE: 'online',
-    OFFLINE: 'offline',
-    AWAY: 'away',
-    BUSY: 'busy'
+    ACTIVE: 'active',
+    INACTIVE: 'inactive',
+    SUSPENDED: 'suspended',
+  },
+  USER_ROLE: {
+    USER: 'user',
+    ADMIN: 'admin',
   },
   MESSAGE_TYPES: {
     TEXT: 'text',
@@ -11,33 +14,24 @@ module.exports = {
     VIDEO: 'video',
     AUDIO: 'audio',
     FILE: 'file',
-    LOCATION: 'location'
-  },
-  STORY_TYPES: {
-    TEXT: 'text',
-    IMAGE: 'image',
-    VIDEO: 'video'
-  },
-  NOTIFICATION_TYPES: {
-    LIKE: 'like',
-    COMMENT: 'comment',
-    FOLLOW: 'follow',
-    MESSAGE: 'message',
-    MENTION: 'mention'
+    CALL: 'call',
   },
   CALL_TYPES: {
+    VOICE: 'voice',
     VIDEO: 'video',
-    AUDIO: 'audio'
   },
   CALL_STATUS: {
-    CALLING: 'calling',
-    ONGOING: 'ongoing',
-    ENDED: 'ended',
-    MISSED: 'missed'
+    MISSED: 'missed',
+    ANSWERED: 'answered',
+    DECLINED: 'declined',
   },
-  PRIVACY_SETTINGS: {
-    PUBLIC: 'public',
-    PRIVATE: 'private',
-    FRIENDS: 'friends'
-  }
+  THEMES: {
+    LIGHT: 'light',
+    DARK: 'dark',
+    SYSTEM: 'system',
+  },
+  STORY_TYPES: {
+    IMAGE: 'image',
+    VIDEO: 'video',
+  },
 };

@@ -1,88 +1,56 @@
-const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { StatusCodes } = require('http-status-codes');
 
-// Generate JWT token
-exports.generateToken = (id) => {
+const generateToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRE
+    expiresIn: process.env.JWT_EXPIRES_IN,
   });
 };
 
-// Verify JWT token
-exports.verifyToken = (token) => {
-  return jwt.verify(token, process.env.JWT_SECRET);
+const generateResetToken = (id) => {
+  return jwt.sign({ id }, process.env.JWT_RESET_SECRET, {
+    expiresIn: '10m',
+  });
 };
 
-// Generate random string
-exports.generateRandomString = (length) => {
-  return crypto
-    .randomBytes(Math.ceil(length / 2))
-    .toString('hex')
-    .slice(0, length);
+const verifyResetToken = (token) => {
+  return jwt.verify(token, process.env.JWT_RESET_SECRET);
 };
 
-// Format user object
-exports.formatUser = (user) => {
-  return {
-    _id: user._id,
-    name: user.name,
-    email: user.email,
-    username: user.username,
-    avatar: user.avatar,
-    verified: user.verified,
-    bio: user.bio,
-    website: user.website,
-    gender: user.gender,
-    followers: user.followers,
-    following: user.following,
-    createdAt: user.createdAt
-  };
+const paginate = (query, page = 1, limit = 10) => {
+  const skip = (page - 1) * limit;
+  return query.skip(skip).limit(limit);
 };
 
-// Format message object
-exports.formatMessage = (message) => {
-  return {
-    _id: message._id,
-    conversation: message.conversation,
-    sender: message.sender,
-    content: message.content,
-    type: message.type,
-    readBy: message.readBy,
-    createdAt: message.createdAt,
-    updatedAt: message.updatedAt
-  };
+const filterObj = (obj, ...allowedFields) => {
+  const newObj = {};
+  Object.keys(obj).forEach((el) => {
+    if (allowedFields.includes(el)) newObj[el] = obj[el];
+  });
+  return newObj;
 };
 
-// Format conversation object
-exports.formatConversation = (conversation) => {
-  return {
-    _id: conversation._id,
-    participants: conversation.participants,
-    isGroup: conversation.isGroup,
-    groupName: conversation.groupName,
-    groupAdmin: conversation.groupAdmin,
-    groupImage: conversation.groupImage,
-    lastMessage: conversation.lastMessage,
-    createdAt: conversation.createdAt,
-    updatedAt: conversation.updatedAt
-  };
+const successResponse = (res, statusCode, data, message) => {
+  res.status(statusCode).json({
+    success: true,
+    message,
+    data,
+  });
 };
 
-// Format story object
-exports.formatStory = (story) => {
-  return {
-    _id: story._id,
-    user: story.user,
-    content: story.content,
-    mediaUrl: story.mediaUrl,
-    mediaType: story.mediaType,
-    viewers: story.viewers,
-    expiresAt: story.expiresAt,
-    createdAt: story.createdAt
-  };
+const errorResponse = (res, statusCode, message) => {
+  res.status(statusCode).json({
+    success: false,
+    message,
+  });
 };
 
-// Async handler to wrap routes for error handling
-exports.asyncHandler = (fn) => (req, res, next) => {
-  Promise.resolve(fn(req, res, next)).catch(next);
+module.exports = {
+  generateToken,
+  generateResetToken,
+  verifyResetToken,
+  paginate,
+  filterObj,
+  successResponse,
+  errorResponse,
 };

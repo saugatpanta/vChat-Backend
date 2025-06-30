@@ -1,163 +1,164 @@
+const asyncHandler = require('express-async-handler');
+const { StatusCodes } = require('http-status-codes');
 const Story = require('../models/Story');
 const User = require('../models/User');
-const ErrorResponse = require('../utils/ErrorResponse');
-const asyncHandler = require('../middlewares/async');
-const { upload } = require('../config/cloudinary');
+const { cloudinary } = require('../config/cloudinary');
+const logger = require('../middlewares/logger');
 
-// @desc    Create story
-// @route   POST /api/v1/stories
+// @desc    Create a new story
+// @route   POST /api/stories
 // @access  Private
-exports.createStory = asyncHandler(async (req, res, next) => {
-  // Upload file to Cloudinary if present
-  let mediaUrl = '';
-  let mediaType = 'text';
+const createStory = asyncHandler(async (req, res) => {
+  const { caption, location } = req.body;
+  const userId = req.user._id;
 
-  if (req.file) {
-    mediaUrl = req.file.path;
-    mediaType = req.file.mimetype.startsWith('image') ? 'image' : 'video';
+  if (!req.file) {
+    res.status(StatusCodes.BAD_REQUEST);
+    throw new Error('Please upload a file');
   }
 
+  // Upload file to Cloudinary
+  const result = await cloudinary.uploader.upload(req.file.path, {
+    resource_type: 'auto',
+    folder: 'vchat/stories',
+  });
+
   const story = await Story.create({
-    user: req.user.id,
-    content: req.body.content,
-    mediaUrl,
-    mediaType,
-    expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // Expires in 24 hours
+    user: userId,
+    media: {
+      url: result.secure_url,
+      type: result.resource_type,
+      duration: result.resource_type === 'video' ? Math.min(result.duration, 15) : 7,
+    },
+    caption,
+    location,
   });
 
-  // Populate user details
-  const populatedStory = await Story.findById(story._id).populate('user', 'name username avatar');
+  const populatedStory = await Story.findById(story._id).populate(
+    'user',
+    'username profilePicture'
+  );
 
-  res.status(201).json({
-    success: true,
-    data: populatedStory
-  });
+  logger.info(`New story created by ${req.user.username}`);
+
+  res.status(StatusCodes.CREATED).json(populatedStory);
 });
 
-// @desc    Get all stories from followed users
-// @route   GET /api/v1/stories
+// @desc    Get stories from users you follow
+// @route   GET /api/stories
 // @access  Private
-exports.getStories = asyncHandler(async (req, res, next) => {
-  // Get current user's following list
-  const user = await User.findById(req.user.id).select('following');
-  
-  // Get stories from followed users that haven't expired
+const getStories = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
+
+  // Get users you follow
+  const user = await User.findById(userId).select('following');
+  const followingIds = user.following.map(id => id.toString());
+
+  // Add your own stories
+  followingIds.push(userId.toString());
+
   const stories = await Story.find({
-    user: { $in: user.following },
-    expiresAt: { $gt: Date.now() }
+    user: { $in: followingIds },
+    expiresAt: { $gt: new Date() },
   })
-    .populate('user', 'name username avatar')
+    .populate('user', 'username profilePicture')
     .sort('-createdAt');
 
   // Group stories by user
-  const storiesByUser = {};
-  stories.forEach(story => {
-    if (!storiesByUser[story.user._id]) {
-      storiesByUser[story.user._id] = {
+  const storiesByUser = stories.reduce((acc, story) => {
+    const userId = story.user._id.toString();
+    if (!acc[userId]) {
+      acc[userId] = {
         user: story.user,
-        stories: []
+        stories: [],
+        viewed: story.views.some(view => view.user.toString() === req.user._id.toString()),
       };
     }
-    storiesByUser[story.user._id].stories.push(story);
-  });
+    acc[userId].stories.push(story);
+    return acc;
+  }, {});
 
-  res.status(200).json({
-    success: true,
-    data: Object.values(storiesByUser)
-  });
+  res.status(StatusCodes.OK).json(Object.values(storiesByUser));
 });
 
-// @desc    Get my stories
-// @route   GET /api/v1/stories/me
+// @desc    Get a specific story
+// @route   GET /api/stories/:storyId
 // @access  Private
-exports.getMyStories = asyncHandler(async (req, res, next) => {
-  const stories = await Story.find({
-    user: req.user.id,
-    expiresAt: { $gt: Date.now() }
-  })
-    .populate('user', 'name username avatar')
-    .sort('-createdAt');
+const getStory = asyncHandler(async (req, res) => {
+  const { storyId } = req.params;
+  const userId = req.user._id;
 
-  res.status(200).json({
-    success: true,
-    data: stories
-  });
-});
-
-// @desc    Get story by ID
-// @route   GET /api/v1/stories/:id
-// @access  Private
-exports.getStory = asyncHandler(async (req, res, next) => {
   const story = await Story.findOne({
-    _id: req.params.id,
-    expiresAt: { $gt: Date.now() }
-  }).populate('user', 'name username avatar');
+    _id: storyId,
+    expiresAt: { $gt: new Date() },
+  }).populate('user', 'username profilePicture');
 
   if (!story) {
-    return next(new ErrorResponse(`Story not found with id of ${req.params.id}`, 404));
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('Story not found or expired');
   }
 
-  // Check if viewer is following the story owner
-  const user = await User.findById(req.user.id).select('following');
-  if (!user.following.includes(story.user._id)) {
-    return next(new ErrorResponse('Not authorized to view this story', 401));
-  }
+  // Check if user has already viewed the story
+  const hasViewed = story.views.some(
+    (view) => view.user.toString() === userId.toString()
+  );
 
-  // Add viewer to story if not already viewed
-  if (!story.viewers.includes(req.user.id)) {
-    story.viewers.push(req.user.id);
+  if (!hasViewed) {
+    story.views.push({ user: userId });
     await story.save();
   }
 
-  res.status(200).json({
-    success: true,
-    data: story
-  });
+  res.status(StatusCodes.OK).json(story);
 });
 
-// @desc    Delete story
-// @route   DELETE /api/v1/stories/:id
+// @desc    Delete a story
+// @route   DELETE /api/stories/:storyId
 // @access  Private
-exports.deleteStory = asyncHandler(async (req, res, next) => {
+const deleteStory = asyncHandler(async (req, res) => {
+  const { storyId } = req.params;
+  const userId = req.user._id;
+
   const story = await Story.findOne({
-    _id: req.params.id,
-    user: req.user.id
+    _id: storyId,
+    user: userId,
   });
 
   if (!story) {
-    return next(new ErrorResponse(`Story not found with id of ${req.params.id}`, 404));
+    res.status(StatusCodes.NOT_FOUND);
+    throw new Error('Story not found or not authorized');
   }
 
-  // Delete media from Cloudinary if exists
-  if (story.mediaUrl) {
-    const publicId = story.mediaUrl.split('/').pop().split('.')[0];
-    await cloudinary.uploader.destroy(`vchat/${publicId}`);
-  }
+  // Delete from Cloudinary
+  const publicId = story.media.url.split('/').pop().split('.')[0];
+  await cloudinary.uploader.destroy(`vchat/stories/${publicId}`, {
+    resource_type: story.media.type === 'video' ? 'video' : 'image',
+  });
 
   await story.remove();
 
-  res.status(200).json({
-    success: true,
-    data: {}
-  });
+  logger.info(`Story deleted by ${req.user.username}`);
+
+  res.status(StatusCodes.OK).json({ success: true });
 });
 
-// @desc    Get story viewers
-// @route   GET /api/v1/stories/:id/viewers
+// @desc    Get my stories
+// @route   GET /api/stories/me
 // @access  Private
-exports.getStoryViewers = asyncHandler(async (req, res, next) => {
-  const story = await Story.findOne({
-    _id: req.params.id,
-    user: req.user.id
-  }).populate('viewers', 'name username avatar');
+const getMyStories = asyncHandler(async (req, res) => {
+  const userId = req.user._id;
 
-  if (!story) {
-    return next(new ErrorResponse(`Story not found with id of ${req.params.id}`, 404));
-  }
+  const stories = await Story.find({
+    user: userId,
+    expiresAt: { $gt: new Date() },
+  }).sort('-createdAt');
 
-  res.status(200).json({
-    success: true,
-    count: story.viewers.length,
-    data: story.viewers
-  });
+  res.status(StatusCodes.OK).json(stories);
 });
+
+module.exports = {
+  createStory,
+  getStories,
+  getStory,
+  deleteStory,
+  getMyStories,
+};

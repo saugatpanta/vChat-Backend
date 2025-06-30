@@ -1,28 +1,25 @@
 const express = require('express');
-const {
-  getUsers,
-  getUser,
-  updateUser,
-  updateAvatar,
-  followUser,
-  unfollowUser,
-  getFollowers,
-  getFollowing
-} = require('../controllers/userController');
-const { protect } = require('../middlewares/auth');
-const { upload } = require('../config/cloudinary');
-
 const router = express.Router();
+const userController = require('../controllers/userController');
+const { protect } = require('../middlewares/auth');
+const upload = require('../services/fileUpload');
 
-router.use(protect);
-
-router.get('/', getUsers);
-router.get('/:id', getUser);
-router.put('/:id', updateUser);
-router.put('/:id/avatar', upload.single('avatar'), updateAvatar);
-router.put('/:id/follow', followUser);
-router.put('/:id/unfollow', unfollowUser);
-router.get('/:id/followers', getFollowers);
-router.get('/:id/following', getFollowing);
+router.get('/', protect, userController.getUsers);
+router.get('/:userId', protect, userController.getUserProfile);
+router.put(
+  '/profile-picture',
+  protect,
+  upload.single('profilePicture'),
+  userController.updateProfilePicture
+);
+router.put(
+  '/cover-photo',
+  protect,
+  upload.single('coverPhoto'),
+  userController.updateCoverPhoto
+);
+router.put('/:userId/follow', protect, userController.followUser);
+router.get('/:userId/followers', protect, userController.getFollowers);
+router.get('/:userId/following', protect, userController.getFollowing);
 
 module.exports = router;

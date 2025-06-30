@@ -1,53 +1,75 @@
 const mongoose = require('mongoose');
 
-const MessageSchema = new mongoose.Schema({
+const messageSchema = new mongoose.Schema({
   conversation: {
-    type: mongoose.Schema.ObjectId,
+    type: mongoose.Schema.Types.ObjectId,
     ref: 'Conversation',
-    required: true
+    required: true,
   },
   sender: {
-    type: mongoose.Schema.ObjectId,
+    type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: true,
   },
-  content: {
+  recipient: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+  },
+  text: {
     type: String,
-    required: true
+    trim: true,
   },
-  type: {
-    type: String,
-    enum: ['text', 'image', 'video', 'audio', 'file', 'location'],
-    default: 'text'
-  },
-  readBy: [
+  media: [
     {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
-    }
+      url: String,
+      type: {
+        type: String,
+        enum: ['image', 'video', 'audio', 'file'],
+      },
+      filename: String,
+      size: Number,
+    },
   ],
-  deleted: {
+  isRead: {
     type: Boolean,
-    default: false
-  }
+    default: false,
+  },
+  readAt: {
+    type: Date,
+  },
+  reactions: [
+    {
+      user: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+      },
+      emoji: String,
+    },
+  ],
+  deletedFor: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+  ],
+  call: {
+    type: {
+      type: String,
+      enum: ['voice', 'video'],
+    },
+    duration: Number,
+    status: {
+      type: String,
+      enum: ['missed', 'answered', 'declined'],
+    },
+  },
 }, {
   timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
 });
 
-// Reverse populate with virtuals
-MessageSchema.virtual('replies', {
-  ref: 'Message',
-  localField: '_id',
-  foreignField: 'replyTo',
-  justOne: false
-});
+// Indexes for faster querying
+messageSchema.index({ conversation: 1, createdAt: -1 });
+messageSchema.index({ sender: 1, recipient: 1 });
 
-// Cascade delete replies when a message is deleted
-MessageSchema.pre('remove', async function(next) {
-  await this.model('Message').deleteMany({ replyTo: this._id });
-  next();
-});
-
-module.exports = mongoose.model('Message', MessageSchema);
+module.exports = mongoose.model('Message', messageSchema);

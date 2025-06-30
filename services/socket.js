@@ -1,92 +1,76 @@
+const { socketAuth } = require('../middlewares/auth');
 const Conversation = require('../models/Conversation');
-const Message = require('../models/Message');
 const User = require('../models/User');
 
 module.exports = (io) => {
-  io.on('connection', (socket) => {
-    console.log(`New socket connection: ${socket.id}`);
+  io.use(socketAuth).on('connection', (socket) => {
+    console.log(`User connected: ${socket.user.username}`);
 
-    // Join user's room
-    socket.on('joinUser', (userId) => {
-      socket.join(userId);
-      console.log(`User ${userId} joined their room`);
+    // Join user's personal room
+    socket.join(socket.user._id.toString());
+
+    // Join all conversation rooms the user is part of
+    Conversation.find({ participants: socket.user._id })
+      .select('_id')
+      .then((conversations) => {
+        conversations.forEach((conversation) => {
+          socket.join(conversation._id.toString());
+        });
+      });
+
+    // Handle typing events
+    socket.on('typing', (conversationId) => {
+      socket.to(conversationId).emit('typing', {
+        userId: socket.user._id,
+        username: socket.user.username,
+      });
     });
 
-    // Join conversation room
-    socket.on('joinConversation', (conversationId) => {
-      socket.join(conversationId);
-      console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
-    });
-
-    // Leave conversation room
-    socket.on('leaveConversation', (conversationId) => {
-      socket.leave(conversationId);
-      console.log(`Socket ${socket.id} left conversation ${conversationId}`);
-    });
-
-    // Typing indicator
-    socket.on('typing', ({ conversationId, userId }) => {
-      socket.broadcast.to(conversationId).emit('typing', userId);
-    });
-
-    // Stop typing indicator
+    // Handle stop typing events
     socket.on('stopTyping', (conversationId) => {
-      socket.broadcast.to(conversationId).emit('stopTyping');
+      socket.to(conversationId).emit('stopTyping', {
+        userId: socket.user._id,
+      });
     });
 
-    // Message read receipt
-    socket.on('markAsRead', async ({ messageId, userId }) => {
-      try {
-        const message = await Message.findById(messageId);
-        
-        if (!message.readBy.includes(userId)) {
-          message.readBy.push(userId);
-          await message.save();
-          
-          io.to(message.conversation.toString()).emit('messageRead', {
-            messageId,
-            readBy: message.readBy
-          });
+    // Handle call events
+    socket.on('callAccepted', ({ conversationId, callerId }) => {
+      io.to(callerId).emit('callAccepted', { conversationId });
+    });
+
+    socket.on('callDeclined', ({ conversationId, callerId }) => {
+      io.to(callerId).emit('callDeclined', { conversationId });
+    });
+
+    // Handle online status
+    socket.on('disconnect', async () => {
+      console.log(`User disconnected: ${socket.user.username}`);
+
+      // Update user's online status with a delay to account for reconnects
+      setTimeout(async () => {
+        const sockets = await io.in(socket.user._id.toString()).fetchSockets();
+        if (sockets.length === 0) {
+          const user = await User.findById(socket.user._id);
+          if (user) {
+            user.isOnline = false;
+            user.lastSeen = new Date();
+            await user.save();
+            
+            // Notify all conversations the user is part of
+            Conversation.find({ participants: user._id })
+              .select('_id')
+              .then((conversations) => {
+                conversations.forEach((conversation) => {
+                  io.to(conversation._id.toString()).emit('userStatusChanged', {
+                    userId: user._id,
+                    isOnline: false,
+                    lastSeen: user.lastSeen,
+                  });
+                });
+              });
+          }
         }
-      } catch (err) {
-        console.error(err);
-      }
-    });
-
-    // Online status
-    socket.on('online', (userId) => {
-      socket.broadcast.emit('userOnline', userId);
-    });
-
-    // Offline status
-    socket.on('offline', (userId) => {
-      socket.broadcast.emit('userOffline', userId);
-    });
-
-    // Call handling
-    socket.on('callAccepted', ({ callId, userId }) => {
-      io.to(callId).emit('callAccepted', userId);
-    });
-
-    socket.on('callRejected', ({ callId, userId }) => {
-      io.to(callId).emit('callRejected', userId);
-    });
-
-    socket.on('callIceCandidate', ({ callId, candidate }) => {
-      socket.broadcast.to(callId).emit('callIceCandidate', candidate);
-    });
-
-    socket.on('callOffer', ({ callId, offer, to }) => {
-      io.to(to).emit('callOffer', { callId, offer });
-    });
-
-    socket.on('callAnswer', ({ callId, answer }) => {
-      socket.broadcast.to(callId).emit('callAnswer', answer);
-    });
-
-    // Disconnect
-    socket.on('disconnect', () => {
-      console.log(`Socket disconnected: ${socket.id}`);
+      }, 5000); // 5 seconds delay
     });
   });
 };

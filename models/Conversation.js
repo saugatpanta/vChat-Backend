@@ -1,55 +1,58 @@
 const mongoose = require('mongoose');
 
-const ConversationSchema = new mongoose.Schema({
+const conversationSchema = new mongoose.Schema({
   participants: [
     {
-      type: mongoose.Schema.ObjectId,
+      type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true
-    }
+      required: true,
+    },
   ],
   isGroup: {
     type: Boolean,
-    default: false
+    default: false,
   },
   groupName: {
     type: String,
-    maxlength: [50, 'Group name cannot be more than 50 characters']
+    trim: true,
+  },
+  groupPhoto: {
+    type: String,
   },
   groupAdmin: {
-    type: mongoose.Schema.ObjectId,
-    ref: 'User'
-  },
-  groupImage: {
-    type: String
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
   },
   lastMessage: {
-    type: mongoose.Schema.ObjectId,
-    ref: 'Message'
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Message',
   },
-  createdAt: {
-    type: Date,
-    default: Date.now
-  },
-  updatedAt: {
-    type: Date,
-    default: Date.now
-  }
+  pinnedBy: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+  ],
+  mutedBy: [
+    {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+  ],
 }, {
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true }
+  timestamps: true,
 });
 
-// Update updatedAt when conversation changes
-ConversationSchema.pre('save', function(next) {
-  this.updatedAt = Date.now();
-  next();
+// Indexes for faster querying
+conversationSchema.index({ participants: 1 });
+conversationSchema.index({ updatedAt: -1 });
+
+// Virtual for unread message count
+conversationSchema.virtual('unreadCount', {
+  ref: 'Message',
+  localField: '_id',
+  foreignField: 'conversation',
+  count: true,
 });
 
-// Cascade delete messages when conversation is deleted
-ConversationSchema.pre('remove', async function(next) {
-  await this.model('Message').deleteMany({ conversation: this._id });
-  next();
-});
-
-module.exports = mongoose.model('Conversation', ConversationSchema);
+module.exports = mongoose.model('Conversation', conversationSchema);
