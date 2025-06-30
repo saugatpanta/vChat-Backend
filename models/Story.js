@@ -1,63 +1,40 @@
 const mongoose = require('mongoose');
 
-const ReactionSchema = new mongoose.Schema({
-  user: {
-    type: mongoose.Schema.ObjectId,
-    ref: 'User',
-    required: true,
-  },
-  reaction: {
-    type: String,
-    required: true,
-    enum: ['like', 'love', 'haha', 'wow', 'sad', 'angry'],
-  },
-});
-
 const StorySchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.ObjectId,
     ref: 'User',
-    required: true,
+    required: true
   },
-  media: {
-    url: {
-      type: String,
-      required: true,
-    },
-    publicId: {
-      type: String,
-      required: true,
-    },
-    type: {
-      type: String,
-      enum: ['image', 'video'],
-      required: true,
-    },
-  },
-  caption: {
+  content: {
     type: String,
-    maxlength: [100, 'Caption cannot be more than 100 characters'],
+    maxlength: [200, 'Story content cannot be more than 200 characters']
   },
-  duration: {
-    type: Number,
-    default: 24, // hours
-    min: 1,
-    max: 48,
+  mediaUrl: {
+    type: String
   },
-  views: [
+  mediaType: {
+    type: String,
+    enum: ['text', 'image', 'video'],
+    default: 'text'
+  },
+  viewers: [
     {
       type: mongoose.Schema.ObjectId,
-      ref: 'User',
-    },
+      ref: 'User'
+    }
   ],
-  reactions: [ReactionSchema],
+  expiresAt: {
+    type: Date,
+    required: true
+  },
   createdAt: {
     type: Date,
-    default: Date.now,
-  },
+    default: Date.now
+  }
 });
 
-// Index for better query performance
-StorySchema.index({ user: 1, createdAt: -1 });
+// Index for automatic deletion of expired stories
+StorySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 module.exports = mongoose.model('Story', StorySchema);

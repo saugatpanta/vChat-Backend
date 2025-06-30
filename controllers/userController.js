@@ -1,272 +1,217 @@
 const User = require('../models/User');
-const logger = require('../middlewares/logger');
-const { uploadToCloudinary, deleteFromCloudinary } = require('../config/cloudinary');
+const ErrorResponse = require('../utils/ErrorResponse');
+const asyncHandler = require('../middlewares/async');
+const { upload } = require('../config/cloudinary');
 
 // @desc    Get all users
-// @route   GET /api/users
-// @access  Private/Admin
-exports.getUsers = async (req, res, next) => {
-  try {
-    const users = await User.find().select('-password');
+// @route   GET /api/v1/users
+// @access  Private
+exports.getUsers = asyncHandler(async (req, res, next) => {
+  // Exclude current user and add search functionality
+  const keyword = req.query.search
+    ? {
+        $or: [
+          { name: { $regex: req.query.search, $options: 'i' } },
+          { username: { $regex: req.query.search, $options: 'i' } }
+        ]
+      }
+    : {};
 
-    res.status(200).json({
-      success: true,
-      count: users.length,
-      users,
-    });
-  } catch (error) {
-    logger.error(`User Controller - Get Users Error: ${error.message}`);
-    next(error);
-  }
-};
+  const users = await User.find({ ...keyword, _id: { $ne: req.user.id } })
+    .select('name username avatar verified')
+    .limit(10);
+
+  res.status(200).json({
+    success: true,
+    count: users.length,
+    data: users
+  });
+});
 
 // @desc    Get single user
-// @route   GET /api/users/:id
+// @route   GET /api/v1/users/:id
 // @access  Private
-exports.getUser = async (req, res, next) => {
-  try {
-    const user = await User.findById(req.params.id).select('-password');
+exports.getUser = asyncHandler(async (req, res, next) => {
+  const user = await User.findById(req.params.id).select(
+    'name username avatar bio website gender followers following verified createdAt'
+  );
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      user,
-    });
-  } catch (error) {
-    logger.error(`User Controller - Get User Error: ${error.message}`);
-    next(error);
+  if (!user) {
+    return next(new ErrorResponse(`User not found with id of ${req.params.id}`, 404));
   }
-};
 
-// @desc    Update user profile
-// @route   PUT /api/users/profile
+  res.status(200).json({
+    success: true,
+    data: user
+  });
+});
+
+// @desc    Update user
+// @route   PUT /api/v1/users/:id
 // @access  Private
-exports.updateProfile = async (req, res, next) => {
-  try {
-    const { username, bio, phone } = req.body;
-    const userId = req.user.id;
-
-    const updateFields = {
-      username,
-      bio,
-      phone,
-    };
-
-    // Handle profile photo upload
-    if (req.files && req.files.profilePhoto) {
-      const user = await User.findById(userId);
-
-      // Delete old photo if exists
-      if (user.profilePhoto && user.profilePhoto.publicId) {
-        await deleteFromCloudinary(user.profilePhoto.publicId);
-      }
-
-      // Upload new photo
-      const file = req.files.profilePhoto;
-      const result = await uploadToCloudinary(file.tempFilePath, 'vchat/profiles');
-
-      updateFields.profilePhoto = {
-        url: result.url,
-        publicId: result.public_id,
-      };
-    }
-
-    const updatedUser = await User.findByIdAndUpdate(userId, updateFields, {
-      new: true,
-      runValidators: true,
-    }).select('-password');
-
-    res.status(200).json({
-      success: true,
-      user: updatedUser,
-    });
-  } catch (error) {
-    logger.error(`User Controller - Update Profile Error: ${error.message}`);
-    next(error);
+exports.updateUser = asyncHandler(async (req, res, next) => {
+  // Make sure user is updating their own profile
+  if (req.params.id !== req.user.id) {
+    return next(new ErrorResponse(`Not authorized to update this user`, 401));
   }
-};
+
+  const fieldsToUpdate = {
+    name: req.body.name,
+    username: req.body.username,
+    bio: req.body.bio,
+    website: req.body.website,
+    gender: req.body.gender
+  };
+
+  const user = await User.findByIdAndUpdate(req.params.id, fieldsToUpdate, {
+    new: true,
+    runValidators: true
+  });
+
+  res.status(200).json({
+    success: true,
+    data: user
+  });
+});
+
+// @desc    Update user avatar
+// @route   PUT /api/v1/users/:id/avatar
+// @access  Private
+exports.updateAvatar = asyncHandler(async (req, res, next) => {
+  // Make sure user is updating their own profile
+  if (req.params.id !== req.user.id) {
+    return next(new ErrorResponse(`Not authorized to update this user`, 401));
+  }
+
+  if (!req.file) {
+    return next(new ErrorResponse(`Please upload an image file`, 400));
+  }
+
+  const user = await User.findById(req.params.id);
+
+  // Delete old avatar from Cloudinary if exists
+  if (user.avatar) {
+    const publicId = user.avatar.split('/').pop().split('.')[0];
+    await cloudinary.uploader.destroy(`vchat/${publicId}`);
+  }
+
+  user.avatar = req.file.path;
+  await user.save();
+
+  res.status(200).json({
+    success: true,
+    data: user
+  });
+});
 
 // @desc    Follow user
-// @route   PUT /api/users/follow/:id
+// @route   PUT /api/v1/users/:id/follow
 // @access  Private
-exports.followUser = async (req, res, next) => {
-  try {
-    const userToFollow = await User.findById(req.params.id);
-    const currentUser = await User.findById(req.user.id);
-
-    if (!userToFollow) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
-    }
-
-    // Check if already following
-    if (
-      currentUser.following.some(
-        user => user._id.toString() === userToFollow._id.toString()
-      )
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: 'Already following this user',
-      });
-    }
-
-    // Add to following list
-    currentUser.following.push(userToFollow._id);
-    await currentUser.save();
-
-    // Add to followers list
-    userToFollow.followers.push(currentUser._id);
-    await userToFollow.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'User followed successfully',
-    });
-  } catch (error) {
-    logger.error(`User Controller - Follow User Error: ${error.message}`);
-    next(error);
+exports.followUser = asyncHandler(async (req, res, next) => {
+  if (req.params.id === req.user.id) {
+    return next(new ErrorResponse(`You cannot follow yourself`, 400));
   }
-};
+
+  const userToFollow = await User.findById(req.params.id);
+  const currentUser = await User.findById(req.user.id);
+
+  if (!userToFollow) {
+    return next(new ErrorResponse(`User not found with id of ${req.params.id}`, 404));
+  }
+
+  // Check if already following
+  if (currentUser.following.includes(req.params.id)) {
+    return next(new ErrorResponse(`You are already following this user`, 400));
+  }
+
+  // Add to following list
+  currentUser.following.push(req.params.id);
+  await currentUser.save();
+
+  // Add to followers list
+  userToFollow.followers.push(req.user.id);
+  await userToFollow.save();
+
+  res.status(200).json({
+    success: true,
+    data: {}
+  });
+});
 
 // @desc    Unfollow user
-// @route   PUT /api/users/unfollow/:id
+// @route   PUT /api/v1/users/:id/unfollow
 // @access  Private
-exports.unfollowUser = async (req, res, next) => {
-  try {
-    const userToUnfollow = await User.findById(req.params.id);
-    const currentUser = await User.findById(req.user.id);
-
-    if (!userToUnfollow) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
-    }
-
-    // Check if not following
-    if (
-      !currentUser.following.some(
-        user => user._id.toString() === userToUnfollow._id.toString()
-      )
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: 'Not following this user',
-      });
-    }
-
-    // Remove from following list
-    currentUser.following = currentUser.following.filter(
-      user => user._id.toString() !== userToUnfollow._id.toString()
-    );
-    await currentUser.save();
-
-    // Remove from followers list
-    userToUnfollow.followers = userToUnfollow.followers.filter(
-      user => user._id.toString() !== currentUser._id.toString()
-    );
-    await userToUnfollow.save();
-
-    res.status(200).json({
-      success: true,
-      message: 'User unfollowed successfully',
-    });
-  } catch (error) {
-    logger.error(`User Controller - Unfollow User Error: ${error.message}`);
-    next(error);
+exports.unfollowUser = asyncHandler(async (req, res, next) => {
+  if (req.params.id === req.user.id) {
+    return next(new ErrorResponse(`You cannot unfollow yourself`, 400));
   }
-};
 
-// @desc    Get user's followers
-// @route   GET /api/users/followers/:id
+  const userToUnfollow = await User.findById(req.params.id);
+  const currentUser = await User.findById(req.user.id);
+
+  if (!userToUnfollow) {
+    return next(new ErrorResponse(`User not found with id of ${req.params.id}`, 404));
+  }
+
+  // Check if not following
+  if (!currentUser.following.includes(req.params.id)) {
+    return next(new ErrorResponse(`You are not following this user`, 400));
+  }
+
+  // Remove from following list
+  currentUser.following = currentUser.following.filter(
+    id => id.toString() !== req.params.id.toString()
+  );
+  await currentUser.save();
+
+  // Remove from followers list
+  userToUnfollow.followers = userToUnfollow.followers.filter(
+    id => id.toString() !== req.user.id.toString()
+  );
+  await userToUnfollow.save();
+
+  res.status(200).json({
+    success: true,
+    data: {}
+  });
+});
+
+// @desc    Get user followers
+// @route   GET /api/v1/users/:id/followers
 // @access  Private
-exports.getFollowers = async (req, res, next) => {
-  try {
-    const user = await User.findById(req.params.id)
-      .select('followers')
-      .populate('followers', 'username profilePhoto');
+exports.getFollowers = asyncHandler(async (req, res, next) => {
+  const user = await User.findById(req.params.id).populate(
+    'followers',
+    'name username avatar verified'
+  );
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      count: user.followers.length,
-      followers: user.followers,
-    });
-  } catch (error) {
-    logger.error(`User Controller - Get Followers Error: ${error.message}`);
-    next(error);
+  if (!user) {
+    return next(new ErrorResponse(`User not found with id of ${req.params.id}`, 404));
   }
-};
 
-// @desc    Get user's following
-// @route   GET /api/users/following/:id
+  res.status(200).json({
+    success: true,
+    count: user.followers.length,
+    data: user.followers
+  });
+});
+
+// @desc    Get user following
+// @route   GET /api/v1/users/:id/following
 // @access  Private
-exports.getFollowing = async (req, res, next) => {
-  try {
-    const user = await User.findById(req.params.id)
-      .select('following')
-      .populate('following', 'username profilePhoto');
+exports.getFollowing = asyncHandler(async (req, res, next) => {
+  const user = await User.findById(req.params.id).populate(
+    'following',
+    'name username avatar verified'
+  );
 
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      count: user.following.length,
-      following: user.following,
-    });
-  } catch (error) {
-    logger.error(`User Controller - Get Following Error: ${error.message}`);
-    next(error);
+  if (!user) {
+    return next(new ErrorResponse(`User not found with id of ${req.params.id}`, 404));
   }
-};
 
-// @desc    Delete user account
-// @route   DELETE /api/users
-// @access  Private
-exports.deleteAccount = async (req, res, next) => {
-  try {
-    const user = await User.findById(req.user.id);
-
-    if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
-    }
-
-    // Delete profile photo if exists
-    if (user.profilePhoto && user.profilePhoto.publicId) {
-      await deleteFromCloudinary(user.profilePhoto.publicId);
-    }
-
-    await user.remove();
-
-    res.status(200).json({
-      success: true,
-      message: 'Account deleted successfully',
-    });
-  } catch (error) {
-    logger.error(`User Controller - Delete Account Error: ${error.message}`);
-    next(error);
-  }
-};
+  res.status(200).json({
+    success: true,
+    count: user.following.length,
+    data: user.following
+  });
+});

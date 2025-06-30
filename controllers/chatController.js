@@ -1,317 +1,329 @@
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const User = require('../models/User');
-const logger = require('../middlewares/logger');
-const { uploadToCloudinary } = require('../config/cloudinary');
-
-// @desc    Start or get conversation
-// @route   POST /api/chat/conversations
-// @access  Private
-exports.startConversation = async (req, res, next) => {
-  try {
-    const { participantId } = req.body;
-    const userId = req.user.id;
-
-    // Check if conversation already exists
-    let conversation = await Conversation.findOne({
-      participants: { $all: [userId, participantId] },
-    }).populate('participants', 'username profilePhoto status lastSeen');
-
-    if (!conversation) {
-      // Create new conversation
-      conversation = await Conversation.create({
-        participants: [userId, participantId],
-      });
-
-      conversation = await Conversation.findById(conversation._id).populate(
-        'participants',
-        'username profilePhoto status lastSeen'
-      );
-    }
-
-    res.status(200).json({
-      success: true,
-      conversation,
-    });
-  } catch (error) {
-    logger.error(`Chat Controller - Start Conversation Error: ${error.message}`);
-    next(error);
-  }
-};
+const ErrorResponse = require('../utils/ErrorResponse');
+const asyncHandler = require('../middlewares/async');
 
 // @desc    Get all conversations for a user
-// @route   GET /api/chat/conversations
+// @route   GET /api/v1/chat/conversations
 // @access  Private
-exports.getConversations = async (req, res, next) => {
-  try {
-    const userId = req.user.id;
+exports.getConversations = asyncHandler(async (req, res, next) => {
+  const conversations = await Conversation.find({
+    participants: { $in: [req.user.id] }
+  })
+    .populate('participants', 'name username avatar')
+    .populate('lastMessage')
+    .sort('-updatedAt');
 
-    const conversations = await Conversation.find({
-      participants: { $in: [userId] },
-    })
-      .populate('participants', 'username profilePhoto status lastSeen')
-      .populate({
-        path: 'lastMessage',
-        select: 'content sender createdAt',
-      })
-      .sort('-updatedAt');
+  res.status(200).json({
+    success: true,
+    count: conversations.length,
+    data: conversations
+  });
+});
 
-    res.status(200).json({
-      success: true,
-      count: conversations.length,
-      conversations,
-    });
-  } catch (error) {
-    logger.error(`Chat Controller - Get Conversations Error: ${error.message}`);
-    next(error);
-  }
-};
-
-// @desc    Get single conversation
-// @route   GET /api/chat/conversations/:id
+// @desc    Get or create conversation
+// @route   GET /api/v1/chat/conversations/:userId
 // @access  Private
-exports.getConversation = async (req, res, next) => {
-  try {
-    const conversation = await Conversation.findById(req.params.id)
-      .populate('participants', 'username profilePhoto status lastSeen')
-      .populate({
-        path: 'messages',
-        options: { sort: { createdAt: -1 }, limit: 20 },
-        populate: {
-          path: 'sender',
-          select: 'username profilePhoto',
-        },
-      });
+exports.getOrCreateConversation = asyncHandler(async (req, res, next) => {
+  const { userId } = req.params;
 
-    if (!conversation) {
-      return res.status(404).json({
-        success: false,
-        message: 'Conversation not found',
-      });
-    }
-
-    // Check if user is part of the conversation
-    if (!conversation.participants.some((p) => p._id.toString() === req.user.id)) {
-      return res.status(401).json({
-        success: false,
-        message: 'Not authorized to access this conversation',
-      });
-    }
-
-    res.status(200).json({
-      success: true,
-      conversation,
-    });
-  } catch (error) {
-    logger.error(`Chat Controller - Get Conversation Error: ${error.message}`);
-    next(error);
+  // Check if user exists
+  const user = await User.findById(userId);
+  if (!user) {
+    return next(new ErrorResponse(`User not found with id of ${userId}`, 404));
   }
-};
+
+  // Check if conversation already exists
+  let conversation = await Conversation.findOne({
+    participants: { $all: [req.user.id, userId] },
+    isGroup: false
+  })
+    .populate('participants', 'name username avatar')
+    .populate('lastMessage');
+
+  // If conversation doesn't exist, create it
+  if (!conversation) {
+    conversation = await Conversation.create({
+      participants: [req.user.id, userId],
+      isGroup: false
+    });
+
+    conversation = await Conversation.findById(conversation._id)
+      .populate('participants', 'name username avatar')
+      .populate('lastMessage');
+  }
+
+  res.status(200).json({
+    success: true,
+    data: conversation
+  });
+});
+
+// @desc    Get messages for a conversation
+// @route   GET /api/v1/chat/conversations/:conversationId/messages
+// @access  Private
+exports.getMessages = asyncHandler(async (req, res, next) => {
+  const { conversationId } = req.params;
+
+  // Check if conversation exists and user is a participant
+  const conversation = await Conversation.findOne({
+    _id: conversationId,
+    participants: { $in: [req.user.id] }
+  });
+
+  if (!conversation) {
+    return next(new ErrorResponse(`Conversation not found with id of ${conversationId}`, 404));
+  }
+
+  const messages = await Message.find({
+    conversation: conversationId
+  })
+    .populate('sender', 'name username avatar')
+    .sort('createdAt');
+
+  res.status(200).json({
+    success: true,
+    count: messages.length,
+    data: messages
+  });
+});
 
 // @desc    Send message
-// @route   POST /api/chat/messages
+// @route   POST /api/v1/chat/conversations/:conversationId/messages
 // @access  Private
-exports.sendMessage = async (req, res, next) => {
-  try {
-    const { conversationId, content, type = 'text' } = req.body;
-    const senderId = req.user.id;
+exports.sendMessage = asyncHandler(async (req, res, next) => {
+  const { conversationId } = req.params;
+  const { content, type } = req.body;
 
-    // Check if conversation exists
-    const conversation = await Conversation.findById(conversationId);
+  // Check if conversation exists and user is a participant
+  const conversation = await Conversation.findOne({
+    _id: conversationId,
+    participants: { $in: [req.user.id] }
+  });
 
-    if (!conversation) {
-      return res.status(404).json({
-        success: false,
-        message: 'Conversation not found',
-      });
-    }
-
-    // Check if user is part of the conversation
-    if (!conversation.participants.includes(senderId)) {
-      return res.status(401).json({
-        success: false,
-        message: 'Not authorized to send message in this conversation',
-      });
-    }
-
-    let mediaUrl, mediaPublicId;
-
-    // Handle file upload if present
-    if (req.files && req.files.file) {
-      const file = req.files.file;
-      const result = await uploadToCloudinary(file.tempFilePath, 'vchat/messages');
-      mediaUrl = result.url;
-      mediaPublicId = result.public_id;
-    }
-
-    // Create message
-    const message = await Message.create({
-      conversation: conversationId,
-      sender: senderId,
-      content,
-      type,
-      media: mediaUrl ? { url: mediaUrl, publicId: mediaPublicId } : undefined,
-    });
-
-    // Update conversation's last message and updatedAt
-    conversation.lastMessage = message._id;
-    conversation.updatedAt = Date.now();
-    await conversation.save();
-
-    // Populate sender info
-    const populatedMessage = await Message.findById(message._id).populate(
-      'sender',
-      'username profilePhoto'
-    );
-
-    res.status(201).json({
-      success: true,
-      message: populatedMessage,
-    });
-  } catch (error) {
-    logger.error(`Chat Controller - Send Message Error: ${error.message}`);
-    next(error);
+  if (!conversation) {
+    return next(new ErrorResponse(`Conversation not found with id of ${conversationId}`, 404));
   }
-};
 
-// @desc    Get messages in conversation
-// @route   GET /api/chat/messages/:conversationId
+  // Create message
+  const message = await Message.create({
+    conversation: conversationId,
+    sender: req.user.id,
+    content,
+    type: type || 'text'
+  });
+
+  // Update conversation last message
+  conversation.lastMessage = message._id;
+  await conversation.save();
+
+  // Populate sender and conversation
+  const populatedMessage = await Message.findById(message._id)
+    .populate('sender', 'name username avatar')
+    .populate('conversation');
+
+  // Emit message to socket
+  req.io.to(conversationId).emit('newMessage', populatedMessage);
+
+  res.status(201).json({
+    success: true,
+    data: populatedMessage
+  });
+});
+
+// @desc    Create group conversation
+// @route   POST /api/v1/chat/conversations/group
 // @access  Private
-exports.getMessages = async (req, res, next) => {
-  try {
-    const { conversationId } = req.params;
-    const { limit = 20, before } = req.query;
+exports.createGroupConversation = asyncHandler(async (req, res, next) => {
+  const { name, participants } = req.body;
 
-    // Check if conversation exists and user is part of it
-    const conversation = await Conversation.findById(conversationId);
-
-    if (!conversation) {
-      return res.status(404).json({
-        success: false,
-        message: 'Conversation not found',
-      });
-    }
-
-    if (!conversation.participants.includes(req.user.id)) {
-      return res.status(401).json({
-        success: false,
-        message: 'Not authorized to access these messages',
-      });
-    }
-
-    // Build query
-    const query = { conversation: conversationId };
-    if (before) {
-      query.createdAt = { $lt: before };
-    }
-
-    const messages = await Message.find(query)
-      .populate('sender', 'username profilePhoto')
-      .sort('-createdAt')
-      .limit(parseInt(limit));
-
-    res.status(200).json({
-      success: true,
-      count: messages.length,
-      messages: messages.reverse(), // Return oldest first for UI
-    });
-  } catch (error) {
-    logger.error(`Chat Controller - Get Messages Error: ${error.message}`);
-    next(error);
+  if (!name || !participants || participants.length < 2) {
+    return next(new ErrorResponse('Please provide name and at least 2 participants', 400));
   }
-};
+
+  // Add current user to participants if not already included
+  if (!participants.includes(req.user.id.toString())) {
+    participants.push(req.user.id.toString());
+  }
+
+  // Check if all participants exist
+  const users = await User.find({ _id: { $in: participants } });
+  if (users.length !== participants.length) {
+    return next(new ErrorResponse('One or more participants not found', 404));
+  }
+
+  // Create group conversation
+  const conversation = await Conversation.create({
+    participants,
+    isGroup: true,
+    groupName: name,
+    groupAdmin: req.user.id
+  });
+
+  const populatedConversation = await Conversation.findById(conversation._id)
+    .populate('participants', 'name username avatar')
+    .populate('lastMessage');
+
+  // Emit new conversation to all participants
+  participants.forEach(participantId => {
+    req.io.to(participantId.toString()).emit('newConversation', populatedConversation);
+  });
+
+  res.status(201).json({
+    success: true,
+    data: populatedConversation
+  });
+});
+
+// @desc    Update group conversation
+// @route   PUT /api/v1/chat/conversations/group/:conversationId
+// @access  Private
+exports.updateGroupConversation = asyncHandler(async (req, res, next) => {
+  const { conversationId } = req.params;
+  const { name, participants } = req.body;
+
+  // Check if conversation exists and is a group
+  const conversation = await Conversation.findOne({
+    _id: conversationId,
+    isGroup: true,
+    groupAdmin: req.user.id
+  });
+
+  if (!conversation) {
+    return next(new ErrorResponse(`Group conversation not found with id of ${conversationId}`, 404));
+  }
+
+  // Update group name if provided
+  if (name) {
+    conversation.groupName = name;
+  }
+
+  // Update participants if provided
+  if (participants && participants.length > 0) {
+    // Check if all new participants exist
+    const users = await User.find({ _id: { $in: participants } });
+    if (users.length !== participants.length) {
+      return next(new ErrorResponse('One or more participants not found', 404));
+    }
+
+    // Add current user to participants if not already included
+    if (!participants.includes(req.user.id.toString())) {
+      participants.push(req.user.id.toString());
+    }
+
+    conversation.participants = participants;
+  }
+
+  await conversation.save();
+
+  const populatedConversation = await Conversation.findById(conversation._id)
+    .populate('participants', 'name username avatar')
+    .populate('lastMessage');
+
+  // Emit updated conversation to all participants
+  populatedConversation.participants.forEach(participant => {
+    req.io.to(participant._id.toString()).emit('updatedConversation', populatedConversation);
+  });
+
+  res.status(200).json({
+    success: true,
+    data: populatedConversation
+  });
+});
 
 // @desc    Delete message
-// @route   DELETE /api/chat/messages/:id
+// @route   DELETE /api/v1/chat/messages/:messageId
 // @access  Private
-exports.deleteMessage = async (req, res, next) => {
-  try {
-    const message = await Message.findById(req.params.id);
+exports.deleteMessage = asyncHandler(async (req, res, next) => {
+  const { messageId } = req.params;
 
-    if (!message) {
-      return res.status(404).json({
-        success: false,
-        message: 'Message not found',
-      });
-    }
+  const message = await Message.findOne({
+    _id: messageId,
+    sender: req.user.id
+  });
 
-    // Check if user is the sender
-    if (message.sender.toString() !== req.user.id) {
-      return res.status(401).json({
-        success: false,
-        message: 'Not authorized to delete this message',
-      });
-    }
-
-    // Delete media from Cloudinary if exists
-    if (message.media && message.media.publicId) {
-      await deleteFromCloudinary(message.media.publicId);
-    }
-
-    await message.remove();
-
-    res.status(200).json({
-      success: true,
-      message: 'Message deleted',
-    });
-  } catch (error) {
-    logger.error(`Chat Controller - Delete Message Error: ${error.message}`);
-    next(error);
+  if (!message) {
+    return next(new ErrorResponse(`Message not found with id of ${messageId}`, 404));
   }
-};
 
-// @desc    Search users
-// @route   GET /api/chat/search
+  await message.remove();
+
+  // Emit deleted message to conversation
+  req.io.to(message.conversation.toString()).emit('deletedMessage', messageId);
+
+  res.status(200).json({
+    success: true,
+    data: {}
+  });
+});
+
+// @desc    Start video call
+// @route   POST /api/v1/chat/conversations/:conversationId/call
 // @access  Private
-exports.searchUsers = async (req, res, next) => {
-  try {
-    const { query } = req.query;
+exports.startVideoCall = asyncHandler(async (req, res, next) => {
+  const { conversationId } = req.params;
+  const { type } = req.body; // 'video' or 'audio'
 
-    if (!query || query.length < 3) {
-      return res.status(400).json({
-        success: false,
-        message: 'Search query must be at least 3 characters',
-      });
+  // Check if conversation exists and user is a participant
+  const conversation = await Conversation.findOne({
+    _id: conversationId,
+    participants: { $in: [req.user.id] }
+  }).populate('participants', 'name username avatar');
+
+  if (!conversation) {
+    return next(new ErrorResponse(`Conversation not found with id of ${conversationId}`, 404));
+  }
+
+  // Create call data
+  const callData = {
+    conversation: conversationId,
+    caller: req.user.id,
+    type: type || 'video',
+    participants: conversation.participants.map(p => p._id),
+    status: 'calling'
+  };
+
+  // Emit call to other participants
+  conversation.participants.forEach(participant => {
+    if (participant._id.toString() !== req.user.id.toString()) {
+      req.io.to(participant._id.toString()).emit('incomingCall', callData);
     }
+  });
 
-    const users = await User.find({
-      $or: [
-        { username: { $regex: query, $options: 'i' } },
-        { email: { $regex: query, $options: 'i' } },
-      ],
-      _id: { $ne: req.user.id }, // Exclude current user
-    }).select('username profilePhoto status');
+  res.status(200).json({
+    success: true,
+    data: callData
+  });
+});
 
-    res.status(200).json({
-      success: true,
-      count: users.length,
-      users,
-    });
-  } catch (error) {
-    logger.error(`Chat Controller - Search Users Error: ${error.message}`);
-    next(error);
-  }
-};
-
-// @desc    Update user status
-// @route   PUT /api/chat/status
+// @desc    End video call
+// @route   POST /api/v1/chat/conversations/:conversationId/call/end
 // @access  Private
-exports.updateStatus = async (req, res, next) => {
-  try {
-    const { status } = req.body;
+exports.endVideoCall = asyncHandler(async (req, res, next) => {
+  const { conversationId } = req.params;
+  const { callId } = req.body;
 
-    const user = await User.findByIdAndUpdate(
-      req.user.id,
-      { status },
-      { new: true, runValidators: true }
-    ).select('username profilePhoto status lastSeen');
+  // Check if conversation exists and user is a participant
+  const conversation = await Conversation.findOne({
+    _id: conversationId,
+    participants: { $in: [req.user.id] }
+  }).populate('participants', 'name username avatar');
 
-    res.status(200).json({
-      success: true,
-      user,
-    });
-  } catch (error) {
-    logger.error(`Chat Controller - Update Status Error: ${error.message}`);
-    next(error);
+  if (!conversation) {
+    return next(new ErrorResponse(`Conversation not found with id of ${conversationId}`, 404));
   }
-};
+
+  // Emit call ended to all participants
+  conversation.participants.forEach(participant => {
+    req.io.to(participant._id.toString()).emit('callEnded', {
+      callId,
+      endedBy: req.user.id
+    });
+  });
+
+  res.status(200).json({
+    success: true,
+    data: {}
+  });
+});

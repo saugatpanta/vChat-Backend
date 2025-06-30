@@ -1,323 +1,303 @@
 const User = require('../models/User');
-const jwt = require('jsonwebtoken');
-const logger = require('../middlewares/logger');
-const { sendEmail } = require('../services/emailService');
-const { generateOTP } = require('../utils/helpers');
-const { JWT_SECRET, JWT_EXPIRE, NODE_ENV } = require('../utils/constants');
+const ErrorResponse = require('../utils/ErrorResponse');
+const asyncHandler = require('../middlewares/async');
+const sendEmail = require('../services/emailService');
+const { generateToken, verifyToken } = require('../utils/helpers');
 
 // @desc    Register user
-// @route   POST /api/auth/register
+// @route   POST /api/v1/auth/register
 // @access  Public
-exports.register = async (req, res, next) => {
-  try {
-    const { username, email, password } = req.body;
+exports.register = asyncHandler(async (req, res, next) => {
+  const { name, email, password, username } = req.body;
 
-    // Check if user exists
-    let user = await User.findOne({ email });
-    if (user) {
-      return res.status(400).json({ success: false, message: 'User already exists' });
-    }
+  // Create user
+  const user = await User.create({
+    name,
+    email,
+    password,
+    username
+  });
 
-    // Create user
-    user = await User.create({
-      username,
-      email,
-      password,
-      verificationOTP: generateOTP(),
-      otpExpire: Date.now() + 10 * 60 * 1000, // 10 minutes
-    });
+  // Generate token
+  const token = generateToken(user._id);
 
-    // Send verification email
-    const message = `Your OTP for vChat verification is: ${user.verificationOTP}`;
-    await sendEmail({
+  // Set cookie
+  res.cookie('token', token, {
+    expires: new Date(Date.now() + process.env.JWT_COOKIE_EXPIRE * 24 * 60 * 60 * 1000),
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict'
+  });
+
+  res.status(201).json({
+    success: true,
+    token,
+    user: {
+      _id: user._id,
+      name: user.name,
       email: user.email,
-      subject: 'vChat Account Verification OTP',
-      message,
-    });
-
-    // Create token
-    const token = user.getSignedJwtToken();
-
-    res.status(201).json({
-      success: true,
-      token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        verified: user.verified,
-      },
-    });
-  } catch (error) {
-    logger.error(`Auth Controller - Register Error: ${error.message}`);
-    next(error);
-  }
-};
-
-// @desc    Verify OTP
-// @route   POST /api/auth/verify
-// @access  Public
-exports.verifyOTP = async (req, res, next) => {
-  try {
-    const { email, otp } = req.body;
-
-    const user = await User.findOne({ email });
-
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
+      username: user.username,
+      avatar: user.avatar,
+      verified: user.verified
     }
-
-    if (user.verified) {
-      return res.status(400).json({ success: false, message: 'User already verified' });
-    }
-
-    if (user.verificationOTP !== otp || user.otpExpire < Date.now()) {
-      return res.status(400).json({ success: false, message: 'Invalid or expired OTP' });
-    }
-
-    user.verified = true;
-    user.verificationOTP = undefined;
-    user.otpExpire = undefined;
-    await user.save();
-
-    // Create token
-    const token = user.getSignedJwtToken();
-
-    res.status(200).json({
-      success: true,
-      token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        verified: user.verified,
-      },
-    });
-  } catch (error) {
-    logger.error(`Auth Controller - Verify OTP Error: ${error.message}`);
-    next(error);
-  }
-};
+  });
+});
 
 // @desc    Login user
-// @route   POST /api/auth/login
+// @route   POST /api/v1/auth/login
 // @access  Public
-exports.login = async (req, res, next) => {
-  try {
-    const { email, password } = req.body;
+exports.login = asyncHandler(async (req, res, next) => {
+  const { email, password } = req.body;
 
-    // Validate email & password
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Please provide an email and password' });
-    }
-
-    // Check for user
-    const user = await User.findOne({ email }).select('+password');
-
-    if (!user) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
-
-    // Check if password matches
-    const isMatch = await user.matchPassword(password);
-
-    if (!isMatch) {
-      return res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
-
-    // Check if user is verified
-    if (!user.verified) {
-      return res.status(401).json({ success: false, message: 'Please verify your email first' });
-    }
-
-    // Create token
-    const token = user.getSignedJwtToken();
-
-    res.status(200).json({
-      success: true,
-      token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        verified: user.verified,
-      },
-    });
-  } catch (error) {
-    logger.error(`Auth Controller - Login Error: ${error.message}`);
-    next(error);
+  // Validate email & password
+  if (!email || !password) {
+    return next(new ErrorResponse('Please provide an email and password', 400));
   }
-};
+
+  // Check for user
+  const user = await User.findOne({ email }).select('+password');
+
+  if (!user) {
+    return next(new ErrorResponse('Invalid credentials', 401));
+  }
+
+  // Check if password matches
+  const isMatch = await user.matchPassword(password);
+
+  if (!isMatch) {
+    return next(new ErrorResponse('Invalid credentials', 401));
+  }
+
+  // Generate token
+  const token = generateToken(user._id);
+
+  // Set cookie
+  res.cookie('token', token, {
+    expires: new Date(Date.now() + process.env.JWT_COOKIE_EXPIRE * 24 * 60 * 60 * 1000),
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict'
+  });
+
+  res.status(200).json({
+    success: true,
+    token,
+    user: {
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      username: user.username,
+      avatar: user.avatar,
+      verified: user.verified
+    }
+  });
+});
+
+// @desc    Logout user / clear cookie
+// @route   GET /api/v1/auth/logout
+// @access  Private
+exports.logout = asyncHandler(async (req, res, next) => {
+  res.cookie('token', 'none', {
+    expires: new Date(Date.now() + 10 * 1000),
+    httpOnly: true
+  });
+
+  res.status(200).json({
+    success: true,
+    data: {}
+  });
+});
 
 // @desc    Get current logged in user
-// @route   GET /api/auth/me
+// @route   GET /api/v1/auth/me
 // @access  Private
-exports.getMe = async (req, res, next) => {
-  try {
-    const user = await User.findById(req.user.id);
+exports.getMe = asyncHandler(async (req, res, next) => {
+  const user = await User.findById(req.user.id);
 
-    res.status(200).json({
-      success: true,
-      user,
-    });
-  } catch (error) {
-    logger.error(`Auth Controller - Get Me Error: ${error.message}`);
-    next(error);
+  res.status(200).json({
+    success: true,
+    data: user
+  });
+});
+
+// @desc    Update user details
+// @route   PUT /api/v1/auth/updatedetails
+// @access  Private
+exports.updateDetails = asyncHandler(async (req, res, next) => {
+  const fieldsToUpdate = {
+    name: req.body.name,
+    email: req.body.email,
+    username: req.body.username
+  };
+
+  const user = await User.findByIdAndUpdate(req.user.id, fieldsToUpdate, {
+    new: true,
+    runValidators: true
+  });
+
+  res.status(200).json({
+    success: true,
+    data: user
+  });
+});
+
+// @desc    Update password
+// @route   PUT /api/v1/auth/updatepassword
+// @access  Private
+exports.updatePassword = asyncHandler(async (req, res, next) => {
+  const user = await User.findById(req.user.id).select('+password');
+
+  // Check current password
+  if (!(await user.matchPassword(req.body.currentPassword))) {
+    return next(new ErrorResponse('Password is incorrect', 401));
   }
-};
+
+  user.password = req.body.newPassword;
+  await user.save();
+
+  // Generate token
+  const token = generateToken(user._id);
+
+  res.status(200).json({
+    success: true,
+    token,
+    data: user
+  });
+});
 
 // @desc    Forgot password
-// @route   POST /api/auth/forgotpassword
+// @route   POST /api/v1/auth/forgotpassword
 // @access  Public
-exports.forgotPassword = async (req, res, next) => {
+exports.forgotPassword = asyncHandler(async (req, res, next) => {
+  const user = await User.findOne({ email: req.body.email });
+
+  if (!user) {
+    return next(new ErrorResponse('There is no user with that email', 404));
+  }
+
+  // Get reset token
+  const resetToken = user.getResetPasswordToken();
+
+  await user.save({ validateBeforeSave: false });
+
+  // Create reset URL
+  const resetUrl = `${req.protocol}://${req.get('host')}/api/v1/auth/resetpassword/${resetToken}`;
+
+  const message = `You are receiving this email because you (or someone else) has requested the reset of a password. Please make a PUT request to: \n\n ${resetUrl}`;
+
   try {
-    const user = await User.findOne({ email: req.body.email });
+    await sendEmail({
+      email: user.email,
+      subject: 'Password reset token',
+      message
+    });
 
-    if (!user) {
-      return res.status(404).json({ success: false, message: 'User not found' });
-    }
-
-    // Get reset token
-    const resetToken = user.getResetPasswordToken();
+    res.status(200).json({ success: true, data: 'Email sent' });
+  } catch (err) {
+    console.log(err);
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
 
     await user.save({ validateBeforeSave: false });
 
-    // Create reset URL
-    const resetUrl = `${req.protocol}://${req.get('host')}/api/auth/resetpassword/${resetToken}`;
-
-    const message = `You are receiving this email because you (or someone else) has requested the reset of a password. Please make a PUT request to: \n\n ${resetUrl}`;
-
-    try {
-      await sendEmail({
-        email: user.email,
-        subject: 'vChat Password Reset Token',
-        message,
-      });
-
-      res.status(200).json({ success: true, message: 'Email sent' });
-    } catch (error) {
-      user.resetPasswordToken = undefined;
-      user.resetPasswordExpire = undefined;
-
-      await user.save({ validateBeforeSave: false });
-
-      logger.error(`Auth Controller - Forgot Password Email Error: ${error.message}`);
-      return res.status(500).json({ success: false, message: 'Email could not be sent' });
-    }
-  } catch (error) {
-    logger.error(`Auth Controller - Forgot Password Error: ${error.message}`);
-    next(error);
+    return next(new ErrorResponse('Email could not be sent', 500));
   }
-};
+});
 
 // @desc    Reset password
-// @route   PUT /api/auth/resetpassword/:resettoken
+// @route   PUT /api/v1/auth/resetpassword/:resettoken
 // @access  Public
-exports.resetPassword = async (req, res, next) => {
-  try {
-    // Get hashed token
-    const resetPasswordToken = crypto
-      .createHash('sha256')
-      .update(req.params.resettoken)
-      .digest('hex');
+exports.resetPassword = asyncHandler(async (req, res, next) => {
+  // Get hashed token
+  const resetPasswordToken = crypto
+    .createHash('sha256')
+    .update(req.params.resettoken)
+    .digest('hex');
 
-    const user = await User.findOne({
-      resetPasswordToken,
-      resetPasswordExpire: { $gt: Date.now() },
-    });
+  const user = await User.findOne({
+    resetPasswordToken,
+    resetPasswordExpire: { $gt: Date.now() }
+  });
 
-    if (!user) {
-      return res.status(400).json({ success: false, message: 'Invalid token' });
-    }
-
-    // Set new password
-    user.password = req.body.password;
-    user.resetPasswordToken = undefined;
-    user.resetPasswordExpire = undefined;
-    await user.save();
-
-    // Create token
-    const token = user.getSignedJwtToken();
-
-    res.status(200).json({
-      success: true,
-      token,
-    });
-  } catch (error) {
-    logger.error(`Auth Controller - Reset Password Error: ${error.message}`);
-    next(error);
+  if (!user) {
+    return next(new ErrorResponse('Invalid token', 400));
   }
-};
 
-// @desc    Update user details
-// @route   PUT /api/auth/updatedetails
+  // Set new password
+  user.password = req.body.password;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpire = undefined;
+  await user.save();
+
+  // Generate token
+  const token = generateToken(user._id);
+
+  res.status(200).json({
+    success: true,
+    token,
+    data: user
+  });
+});
+
+// @desc    Verify email
+// @route   GET /api/v1/auth/verifyemail/:verificationtoken
+// @access  Public
+exports.verifyEmail = asyncHandler(async (req, res, next) => {
+  const verificationToken = req.params.verificationtoken;
+
+  const user = await User.findOne({ verificationToken });
+
+  if (!user) {
+    return next(new ErrorResponse('Invalid token', 400));
+  }
+
+  user.verified = true;
+  user.verificationToken = undefined;
+  await user.save();
+
+  // Generate token
+  const token = generateToken(user._id);
+
+  res.status(200).json({
+    success: true,
+    token,
+    data: user
+  });
+});
+
+// @desc    Send verification email
+// @route   POST /api/v1/auth/sendverificationemail
 // @access  Private
-exports.updateDetails = async (req, res, next) => {
-  try {
-    const fieldsToUpdate = {
-      username: req.body.username,
-      email: req.body.email,
-    };
+exports.sendVerificationEmail = asyncHandler(async (req, res, next) => {
+  const user = await User.findById(req.user.id);
 
-    const user = await User.findByIdAndUpdate(req.user.id, fieldsToUpdate, {
-      new: true,
-      runValidators: true,
-    });
-
-    res.status(200).json({
-      success: true,
-      user,
-    });
-  } catch (error) {
-    logger.error(`Auth Controller - Update Details Error: ${error.message}`);
-    next(error);
+  if (user.verified) {
+    return next(new ErrorResponse('Email already verified', 400));
   }
-};
 
-// @desc    Update password
-// @route   PUT /api/auth/updatepassword
-// @access  Private
-exports.updatePassword = async (req, res, next) => {
+  const verificationToken = user.getVerificationToken();
+
+  await user.save({ validateBeforeSave: false });
+
+  // Create verification URL
+  const verificationUrl = `${req.protocol}://${req.get('host')}/api/v1/auth/verifyemail/${verificationToken}`;
+
+  const message = `Please click the following link to verify your email: \n\n ${verificationUrl}`;
+
   try {
-    const user = await User.findById(req.user.id).select('+password');
-
-    // Check current password
-    if (!(await user.matchPassword(req.body.currentPassword))) {
-      return res.status(401).json({ success: false, message: 'Password is incorrect' });
-    }
-
-    user.password = req.body.newPassword;
-    await user.save();
-
-    // Create token
-    const token = user.getSignedJwtToken();
-
-    res.status(200).json({
-      success: true,
-      token,
+    await sendEmail({
+      email: user.email,
+      subject: 'Email verification',
+      message
     });
-  } catch (error) {
-    logger.error(`Auth Controller - Update Password Error: ${error.message}`);
-    next(error);
+
+    res.status(200).json({ success: true, data: 'Email sent' });
+  } catch (err) {
+    console.log(err);
+    user.verificationToken = undefined;
+
+    await user.save({ validateBeforeSave: false });
+
+    return next(new ErrorResponse('Email could not be sent', 500));
   }
-};
-
-// @desc    Logout user
-// @route   GET /api/auth/logout
-// @access  Private
-exports.logout = async (req, res, next) => {
-  try {
-    res.cookie('token', 'none', {
-      expires: new Date(Date.now() + 10 * 1000),
-      httpOnly: true,
-    });
-
-    res.status(200).json({
-      success: true,
-      message: 'User logged out',
-    });
-  } catch (error) {
-    logger.error(`Auth Controller - Logout Error: ${error.message}`);
-    next(error);
-  }
-};
+});

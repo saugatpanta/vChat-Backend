@@ -1,25 +1,28 @@
 const express = require('express');
-const router = express.Router();
-const { protect } = require('../middlewares/auth');
 const {
   getUsers,
   getUser,
-  updateProfile,
+  updateUser,
+  updateAvatar,
   followUser,
   unfollowUser,
   getFollowers,
-  getFollowing,
-  deleteAccount
+  getFollowing
 } = require('../controllers/userController');
-const upload = require('../services/fileUpload');
+const { protect } = require('../middlewares/auth');
+const { upload } = require('../config/cloudinary');
 
-router.get('/', protect, getUsers);
-router.get('/:id', protect, getUser);
-router.put('/profile', protect, upload.single('profilePhoto'), updateProfile);
-router.put('/follow/:id', protect, followUser);
-router.put('/unfollow/:id', protect, unfollowUser);
-router.get('/followers/:id', protect, getFollowers);
-router.get('/following/:id', protect, getFollowing);
-router.delete('/', protect, deleteAccount);
+const router = express.Router();
+
+router.use(protect);
+
+router.get('/', getUsers);
+router.get('/:id', getUser);
+router.put('/:id', updateUser);
+router.put('/:id/avatar', upload.single('avatar'), updateAvatar);
+router.put('/:id/follow', followUser);
+router.put('/:id/unfollow', unfollowUser);
+router.get('/:id/followers', getFollowers);
+router.get('/:id/following', getFollowing);
 
 module.exports = router;

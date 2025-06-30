@@ -4,41 +4,50 @@ const MessageSchema = new mongoose.Schema({
   conversation: {
     type: mongoose.Schema.ObjectId,
     ref: 'Conversation',
-    required: true,
+    required: true
   },
   sender: {
     type: mongoose.Schema.ObjectId,
     ref: 'User',
-    required: true,
+    required: true
   },
   content: {
     type: String,
-    required: function () {
-      return !this.media; // Content is required if there's no media
-    },
+    required: true
   },
   type: {
     type: String,
-    enum: ['text', 'image', 'video', 'audio', 'file'],
-    default: 'text',
-  },
-  media: {
-    url: String,
-    publicId: String,
+    enum: ['text', 'image', 'video', 'audio', 'file', 'location'],
+    default: 'text'
   },
   readBy: [
     {
       type: mongoose.Schema.ObjectId,
-      ref: 'User',
-    },
+      ref: 'User'
+    }
   ],
-  createdAt: {
-    type: Date,
-    default: Date.now,
-  },
+  deleted: {
+    type: Boolean,
+    default: false
+  }
+}, {
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
-// Add text index for search functionality
-MessageSchema.index({ content: 'text' });
+// Reverse populate with virtuals
+MessageSchema.virtual('replies', {
+  ref: 'Message',
+  localField: '_id',
+  foreignField: 'replyTo',
+  justOne: false
+});
+
+// Cascade delete replies when a message is deleted
+MessageSchema.pre('remove', async function(next) {
+  await this.model('Message').deleteMany({ replyTo: this._id });
+  next();
+});
 
 module.exports = mongoose.model('Message', MessageSchema);

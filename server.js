@@ -1,171 +1,102 @@
-require('colors');
+require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
-const dotenv = require('dotenv');
-const morgan = require('morgan');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const hpp = require('hpp');
 const mongoSanitize = require('express-mongo-sanitize');
+const xss = require('xss-clean');
+const hpp = require('hpp');
 const cookieParser = require('cookie-parser');
 const path = require('path');
-const fs = require('fs');
 const http = require('http');
 const socketio = require('socket.io');
+
 const connectDB = require('./config/db');
-const logger = require('./middlewares/logger');
 const errorHandler = require('./middlewares/error');
-const configureSocket = require('./services/socket');
-const multer = require('multer');
+const logger = require('./middlewares/logger');
+const socketService = require('./services/socket');
 
-// Load env vars
-dotenv.config({ path: './.env' });
-
-// Create tmp directory if it doesn't exist
-const tmpDir = path.join(__dirname, 'tmp');
-if (!fs.existsSync(tmpDir)) {
-  fs.mkdirSync(tmpDir);
-}
+// Route files
+const authRoutes = require('./routes/auth');
+const userRoutes = require('./routes/users');
+const chatRoutes = require('./routes/chat');
+const storyRoutes = require('./routes/stories');
 
 // Connect to database
 connectDB();
 
-// Route files
-const auth = require('./routes/auth');
-const users = require('./routes/users');
-const chat = require('./routes/chat');
-const stories = require('./routes/stories');
-
 const app = express();
-
-// Create HTTP server
 const server = http.createServer(app);
 
-// Socket.io
+// Initialize socket.io
 const io = socketio(server, {
   cors: {
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
+    origin: process.env.FRONTEND_URL,
     methods: ['GET', 'POST'],
-  },
+    credentials: true
+  }
 });
 
-configureSocket(io);
-
-// Body parser
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-
-// Cookie parser
-app.use(cookieParser());
-
-// Dev logging middleware
-if (process.env.NODE_ENV === 'development') {
-  app.use(morgan('dev'));
-}
-
-// Sanitize data
-app.use(mongoSanitize());
+// Socket.io connection
+socketService(io);
 
 // Set security headers
 app.use(helmet());
 
+// Enable CORS
+app.use(cors({
+  origin: process.env.FRONTEND_URL,
+  credentials: true
+}));
+
 // Rate limiting
 const limiter = rateLimit({
-  windowMs: 10 * 60 * 1000, // 10 mins
-  max: 1000, // limit each IP to 1000 requests per windowMs
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000 // limit each IP to 1000 requests per windowMs
 });
 app.use(limiter);
 
-// Prevent http param pollution
+// Body parser
+app.use(express.json({ limit: '10kb' }));
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+
+// Cookie parser
+app.use(cookieParser());
+
+// Data sanitization against NoSQL query injection
+app.use(mongoSanitize());
+
+// Data sanitization against XSS
+app.use(xss());
+
+// Prevent parameter pollution
 app.use(hpp());
 
-// Enable CORS
-app.use(
-  cors({
-    origin: process.env.CLIENT_URL || 'http://localhost:3000',
-    credentials: true,
-  })
-);
+// Logging middleware
+app.use(logger);
 
-// Set static folder
+// Static folder
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Mount routers
-app.use('/api/auth', auth);
-app.use('/api/users', users);
-app.use('/api/chat', chat);
-app.use('/api/stories', stories);
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  if (err instanceof multer.MulterError) {
-    return res.status(400).json({
-      success: false,
-      message: err.message
-    });
-  }
-  next(err);
-});
-
-// Handle unhandled routes
-app.use('*', (req, res, next) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found'
-  });
-});
+app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/users', userRoutes);
+app.use('/api/v1/chat', chatRoutes);
+app.use('/api/v1/stories', storyRoutes);
 
 // Error handler middleware
 app.use(errorHandler);
 
-// Cleanup temporary files
-const cleanupTempFiles = () => {
-  fs.readdir(tmpDir, (err, files) => {
-    if (err) {
-      logger.error(`Temp file cleanup error: ${err.message}`);
-      return;
-    }
-    
-    files.forEach(file => {
-      fs.unlink(path.join(tmpDir, file), err => {
-        if (err) logger.error(`Error deleting temp file: ${err.message}`);
-      });
-    });
-  });
-};
-
-// Run cleanup every hour
-setInterval(cleanupTempFiles, 3600000);
-
-// Check required environment variables
-const requiredEnvVars = ['MONGO_URI', 'JWT_SECRET', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'];
-requiredEnvVars.forEach(envVar => {
-  if (!process.env[envVar]) {
-    logger.error(`Missing required environment variable: ${envVar}`.red);
-    process.exit(1);
-  }
-});
-
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, () => {
-  logger.info(
-    `Server running in ${process.env.NODE_ENV} mode on port ${PORT}`.yellow.bold
-  );
+  console.log(`Server running in ${process.env.NODE_ENV} mode on port ${PORT}`);
 });
 
 // Handle unhandled promise rejections
 process.on('unhandledRejection', (err, promise) => {
-  logger.error(`Error: ${err.message}`.red);
+  console.log(`Error: ${err.message}`.red);
   // Close server & exit process
   server.close(() => process.exit(1));
-});
-
-// Handle SIGTERM for graceful shutdown
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM received. Shutting down gracefully...');
-  server.close(() => {
-    logger.info('Process terminated');
-  });
 });

@@ -1,35 +1,40 @@
-const multer = require('multer');
-const path = require('path');
-const logger = require('../middlewares/logger');
+const cloudinary = require('cloudinary').v2;
+const fs = require('fs');
+const { promisify } = require('util');
+const writeFileAsync = promisify(fs.writeFile);
+const unlinkAsync = promisify(fs.unlink);
 
-// Configure storage
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, './tmp/');
-  },
-  filename: function (req, file, cb) {
-    cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
-  }
-});
+exports.uploadFile = async (file, folder = 'vchat') => {
+  try {
+    // Write the buffer to a temporary file
+    const tempFilePath = `/tmp/${Date.now()}-${file.originalname}`;
+    await writeFileAsync(tempFilePath, file.buffer);
 
-// File filter
-const fileFilter = (req, file, cb) => {
-  const filetypes = /jpeg|jpg|png|gif|mp4|mov|avi|mp3|wav/;
-  const extname = filetypes.test(path.extname(file.originalname).toLowerCase();
-  const mimetype = filetypes.test(file.mimetype);
+    // Upload to Cloudinary
+    const result = await cloudinary.uploader.upload(tempFilePath, {
+      folder,
+      resource_type: 'auto'
+    });
 
-  if (extname && mimetype) {
-    return cb(null, true);
-  } else {
-    cb(new Error('Error: Only image, video and audio files are allowed'));
+    // Delete the temporary file
+    await unlinkAsync(tempFilePath);
+
+    return {
+      url: result.secure_url,
+      publicId: result.public_id,
+      resourceType: result.resource_type
+    };
+  } catch (err) {
+    console.error('Error uploading file:', err);
+    throw err;
   }
 };
 
-// Initialize Multer
-const upload = multer({
-  storage: storage,
-  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
-  fileFilter: fileFilter
-});
-
-module.exports = upload;
+exports.deleteFile = async (publicId) => {
+  try {
+    await cloudinary.uploader.destroy(publicId);
+  } catch (err) {
+    console.error('Error deleting file:', err);
+    throw err;
+  }
+};

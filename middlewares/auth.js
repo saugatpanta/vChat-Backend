@@ -1,12 +1,13 @@
 const jwt = require('jsonwebtoken');
+const ErrorResponse = require('../utils/ErrorResponse');
+const asyncHandler = require('./async');
 const User = require('../models/User');
-const logger = require('./logger');
-const { JWT_SECRET } = require('../utils/constants');
 
 // Protect routes
-exports.protect = async (req, res, next) => {
+exports.protect = asyncHandler(async (req, res, next) => {
   let token;
 
+  // Get token from header or cookie
   if (
     req.headers.authorization &&
     req.headers.authorization.startsWith('Bearer')
@@ -16,61 +17,34 @@ exports.protect = async (req, res, next) => {
     token = req.cookies.token;
   }
 
+  // Make sure token exists
   if (!token) {
-    logger.warn('Attempt to access protected route without token');
-    return res.status(401).json({
-      success: false,
-      message: 'Not authorized to access this route',
-    });
+    return next(new ErrorResponse('Not authorized to access this route', 401));
   }
 
   try {
     // Verify token
-    const decoded = jwt.verify(token, JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    req.user = await User.findById(decoded.id);
-
-    if (!req.user) {
-      logger.warn('Token valid but user not found');
-      return res.status(401).json({
-        success: false,
-        message: 'Not authorized to access this route',
-      });
-    }
+    req.user = await User.findById(decoded.id).select('-password');
 
     next();
-  } catch (error) {
-    logger.error(`Auth Middleware Error: ${error.message}`);
-    return res.status(401).json({
-      success: false,
-      message: 'Not authorized to access this route',
-    });
+  } catch (err) {
+    return next(new ErrorResponse('Not authorized to access this route', 401));
   }
-};
+});
 
 // Grant access to specific roles
 exports.authorize = (...roles) => {
   return (req, res, next) => {
     if (!roles.includes(req.user.role)) {
-      logger.warn(
-        `User ${req.user.id} attempted to access admin route without authorization`
+      return next(
+        new ErrorResponse(
+          `User role ${req.user.role} is not authorized to access this route`,
+          403
+        )
       );
-      return res.status(403).json({
-        success: false,
-        message: `User role ${req.user.role} is not authorized to access this route`,
-      });
     }
     next();
   };
-};
-
-// Check if user is verified
-exports.checkVerified = async (req, res, next) => {
-  if (!req.user.verified) {
-    return res.status(403).json({
-      success: false,
-      message: 'Please verify your email first',
-    });
-  }
-  next();
 };

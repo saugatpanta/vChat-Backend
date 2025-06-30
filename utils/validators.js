@@ -1,75 +1,121 @@
 const validator = require('validator');
-const { User } = require('../models');
+const { ErrorResponse } = require('./ErrorResponse');
 
-// Validate registration data
-const validateRegisterInput = async (data) => {
+exports.validateRegisterInput = (data) => {
   const errors = {};
 
-  // Username validation
-  if (!data.username || !validator.isLength(data.username, { min: 3, max: 20 })) {
-    errors.username = 'Username must be between 3 and 20 characters';
-  } else {
-    const existingUser = await User.findOne({ username: data.username });
-    if (existingUser) {
-      errors.username = 'Username is already taken';
-    }
+  // Name validation
+  if (validator.isEmpty(data.name)) {
+    errors.name = 'Name field is required';
+  } else if (!validator.isLength(data.name, { min: 2, max: 50 })) {
+    errors.name = 'Name must be between 2 and 50 characters';
   }
 
   // Email validation
-  if (!data.email || !validator.isEmail(data.email)) {
-    errors.email = 'Please provide a valid email';
-  } else {
-    const existingUser = await User.findOne({ email: data.email });
-    if (existingUser) {
-      errors.email = 'Email is already registered';
-    }
+  if (validator.isEmpty(data.email)) {
+    errors.email = 'Email field is required';
+  } else if (!validator.isEmail(data.email)) {
+    errors.email = 'Email is invalid';
+  }
+
+  // Username validation
+  if (validator.isEmpty(data.username)) {
+    errors.username = 'Username field is required';
+  } else if (!validator.isLength(data.username, { min: 3, max: 30 })) {
+    errors.username = 'Username must be between 3 and 30 characters';
+  } else if (!/^[a-zA-Z0-9_]+$/.test(data.username)) {
+    errors.username = 'Username can only contain letters, numbers and underscores';
   }
 
   // Password validation
-  if (!data.password || !validator.isLength(data.password, { min: 6 })) {
+  if (validator.isEmpty(data.password)) {
+    errors.password = 'Password field is required';
+  } else if (!validator.isLength(data.password, { min: 6 })) {
     errors.password = 'Password must be at least 6 characters';
   }
 
   return {
     errors,
-    isValid: Object.keys(errors).length === 0,
+    isValid: Object.keys(errors).length === 0
   };
 };
 
-// Validate login data
-const validateLoginInput = (data) => {
+exports.validateLoginInput = (data) => {
   const errors = {};
 
-  if (!data.email || !validator.isEmail(data.email)) {
-    errors.email = 'Please provide a valid email';
+  // Email validation
+  if (validator.isEmpty(data.email)) {
+    errors.email = 'Email field is required';
+  } else if (!validator.isEmail(data.email)) {
+    errors.email = 'Email is invalid';
   }
 
-  if (!data.password) {
-    errors.password = 'Password is required';
+  // Password validation
+  if (validator.isEmpty(data.password)) {
+    errors.password = 'Password field is required';
   }
 
   return {
     errors,
-    isValid: Object.keys(errors).length === 0,
+    isValid: Object.keys(errors).length === 0
   };
 };
 
-// Validate password reset data
-const validatePasswordResetInput = (data) => {
+exports.validateUpdateProfileInput = (data) => {
   const errors = {};
 
-  if (!data.password || !validator.isLength(data.password, { min: 6 })) {
-    errors.password = 'Password must be at least 6 characters';
+  // Name validation
+  if (data.name && !validator.isLength(data.name, { min: 2, max: 50 })) {
+    errors.name = 'Name must be between 2 and 50 characters';
+  }
+
+  // Username validation
+  if (data.username && !validator.isLength(data.username, { min: 3, max: 30 })) {
+    errors.username = 'Username must be between 3 and 30 characters';
+  } else if (data.username && !/^[a-zA-Z0-9_]+$/.test(data.username)) {
+    errors.username = 'Username can only contain letters, numbers and underscores';
+  }
+
+  // Bio validation
+  if (data.bio && !validator.isLength(data.bio, { max: 150 })) {
+    errors.bio = 'Bio cannot be more than 150 characters';
+  }
+
+  // Website validation
+  if (data.website && !validator.isURL(data.website)) {
+    errors.website = 'Website URL is invalid';
   }
 
   return {
     errors,
-    isValid: Object.keys(errors).length === 0,
+    isValid: Object.keys(errors).length === 0
   };
 };
 
-module.exports = {
-  validateRegisterInput,
-  validateLoginInput,
-  validatePasswordResetInput,
+exports.validatePasswordInput = (data) => {
+  const errors = {};
+
+  // Current password validation
+  if (validator.isEmpty(data.currentPassword)) {
+    errors.currentPassword = 'Current password is required';
+  }
+
+  // New password validation
+  if (validator.isEmpty(data.newPassword)) {
+    errors.newPassword = 'New password is required';
+  } else if (!validator.isLength(data.newPassword, { min: 6 })) {
+    errors.newPassword = 'Password must be at least 6 characters';
+  }
+
+  // Confirm password validation
+  if (validator.isEmpty(data.confirmPassword)) {
+    errors.confirmPassword = 'Please confirm your password';
+  } else if (!validator.equals(data.newPassword, data.confirmPassword)) {
+    errors.confirmPassword = 'Passwords do not match';
+  }
+
+  return {
+    errors,
+    isValid: Object.keys(errors).length === 0
+  };
 };

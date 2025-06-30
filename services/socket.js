@@ -1,131 +1,92 @@
-const logger = require('../middlewares/logger');
 const Conversation = require('../models/Conversation');
 const Message = require('../models/Message');
 const User = require('../models/User');
 
-const configureSocket = (io) => {
+module.exports = (io) => {
   io.on('connection', (socket) => {
-    logger.info(`New socket connection: ${socket.id}`);
+    console.log(`New socket connection: ${socket.id}`);
 
     // Join user's room
-    socket.on('join', async (userId) => {
-      try {
-        socket.join(userId);
-        logger.info(`User ${userId} joined socket room`);
-
-        // Update user status to online
-        await User.findByIdAndUpdate(userId, { status: 'online' });
-
-        // Notify friends
-        const user = await User.findById(userId).select('following');
-        user.following.forEach(friendId => {
-          io.to(friendId.toString()).emit('friendStatus', {
-            userId,
-            status: 'online',
-          });
-        });
-      } catch (error) {
-        logger.error(`Socket join error: ${error.message}`);
-      }
+    socket.on('joinUser', (userId) => {
+      socket.join(userId);
+      console.log(`User ${userId} joined their room`);
     });
 
-    // Handle new message
-    socket.on('sendMessage', async (data) => {
-      try {
-        const { conversationId, senderId, content, type, media } = data;
-
-        // Create message in DB
-        const message = await Message.create({
-          conversation: conversationId,
-          sender: senderId,
-          content,
-          type,
-          media,
-        });
-
-        // Update conversation's last message
-        const conversation = await Conversation.findByIdAndUpdate(
-          conversationId,
-          {
-            lastMessage: message._id,
-            updatedAt: Date.now(),
-          },
-          { new: true }
-        ).populate('participants', 'username profilePhoto status lastSeen');
-
-        // Populate sender info
-        const populatedMessage = await Message.findById(message._id).populate(
-          'sender',
-          'username profilePhoto'
-        );
-
-        // Emit to all participants
-        conversation.participants.forEach((participant) => {
-          io.to(participant._id.toString()).emit('newMessage', {
-            conversationId,
-            message: populatedMessage,
-          });
-        });
-      } catch (error) {
-        logger.error(`Socket sendMessage error: ${error.message}`);
-      }
+    // Join conversation room
+    socket.on('joinConversation', (conversationId) => {
+      socket.join(conversationId);
+      console.log(`Socket ${socket.id} joined conversation ${conversationId}`);
     });
 
-    // Handle message read
-    socket.on('markAsRead', async ({ messageId, userId, conversationId }) => {
-      try {
-        const message = await Message.findByIdAndUpdate(
-          messageId,
-          { $addToSet: { readBy: userId } },
-          { new: true }
-        );
+    // Leave conversation room
+    socket.on('leaveConversation', (conversationId) => {
+      socket.leave(conversationId);
+      console.log(`Socket ${socket.id} left conversation ${conversationId}`);
+    });
 
-        if (message) {
-          io.to(conversationId).emit('messageRead', {
+    // Typing indicator
+    socket.on('typing', ({ conversationId, userId }) => {
+      socket.broadcast.to(conversationId).emit('typing', userId);
+    });
+
+    // Stop typing indicator
+    socket.on('stopTyping', (conversationId) => {
+      socket.broadcast.to(conversationId).emit('stopTyping');
+    });
+
+    // Message read receipt
+    socket.on('markAsRead', async ({ messageId, userId }) => {
+      try {
+        const message = await Message.findById(messageId);
+        
+        if (!message.readBy.includes(userId)) {
+          message.readBy.push(userId);
+          await message.save();
+          
+          io.to(message.conversation.toString()).emit('messageRead', {
             messageId,
-            readBy: message.readBy,
+            readBy: message.readBy
           });
         }
-      } catch (error) {
-        logger.error(`Socket markAsRead error: ${error.message}`);
+      } catch (err) {
+        console.error(err);
       }
     });
 
-    // Handle typing indicator
-    socket.on('typing', ({ conversationId, userId, isTyping }) => {
-      socket.to(conversationId).emit('typing', { userId, isTyping });
+    // Online status
+    socket.on('online', (userId) => {
+      socket.broadcast.emit('userOnline', userId);
     });
 
-    // Handle disconnect
-    socket.on('disconnect', async () => {
-      try {
-        logger.info(`Socket disconnected: ${socket.id}`);
+    // Offline status
+    socket.on('offline', (userId) => {
+      socket.broadcast.emit('userOffline', userId);
+    });
 
-        // Find user by socket ID and update status
-        // Note: In a real app, you'd need a way to map socket IDs to user IDs
-        // This is a simplified version
-        const userId = socket.userId; // You'd need to set this when the user joins
-        if (userId) {
-          await User.findByIdAndUpdate(userId, {
-            status: 'offline',
-            lastSeen: Date.now(),
-          });
+    // Call handling
+    socket.on('callAccepted', ({ callId, userId }) => {
+      io.to(callId).emit('callAccepted', userId);
+    });
 
-          // Notify friends
-          const user = await User.findById(userId).select('following');
-          user.following.forEach(friendId => {
-            io.to(friendId.toString()).emit('friendStatus', {
-              userId,
-              status: 'offline',
-              lastSeen: Date.now(),
-            });
-          });
-        }
-      } catch (error) {
-        logger.error(`Socket disconnect error: ${error.message}`);
-      }
+    socket.on('callRejected', ({ callId, userId }) => {
+      io.to(callId).emit('callRejected', userId);
+    });
+
+    socket.on('callIceCandidate', ({ callId, candidate }) => {
+      socket.broadcast.to(callId).emit('callIceCandidate', candidate);
+    });
+
+    socket.on('callOffer', ({ callId, offer, to }) => {
+      io.to(to).emit('callOffer', { callId, offer });
+    });
+
+    socket.on('callAnswer', ({ callId, answer }) => {
+      socket.broadcast.to(callId).emit('callAnswer', answer);
+    });
+
+    // Disconnect
+    socket.on('disconnect', () => {
+      console.log(`Socket disconnected: ${socket.id}`);
     });
   });
 };
-
-module.exports = configureSocket;
