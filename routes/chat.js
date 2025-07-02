@@ -1,33 +1,24 @@
 const express = require('express');
 const router = express.Router();
-const chatController = require('../controllers/chatController');
+const {
+  getConversations,
+  getOrCreateConversation,
+  getMessages,
+  sendMessage,
+  markAsRead,
+  startVideoCall,
+  updateCallStatus
+} = require('../controllers/chatController');
 const { protect } = require('../middlewares/auth');
-const upload = require('../services/fileUpload');
 
-router.get('/conversations', protect, chatController.getConversations);
-router.post('/conversations', protect, chatController.createConversation);
-router.post(
-  '/conversations/group',
-  protect,
-  chatController.createGroupConversation
-);
-router.get(
-  '/conversations/:conversationId/messages',
-  protect,
-  chatController.getMessages
-);
-router.post(
-  '/conversations/:conversationId/messages',
-  protect,
-  upload.array('media', 10),
-  chatController.sendMessage
-);
-router.delete(
-  '/messages/:messageId',
-  protect,
-  chatController.deleteMessage
-);
-router.post('/call', protect, chatController.startCall);
-router.put('/call/:messageId', protect, chatController.endCall);
+router.use(protect);
+
+router.get('/conversations', getConversations);
+router.post('/conversations', getOrCreateConversation);
+router.get('/messages/:conversationId', getMessages);
+router.post('/messages', sendMessage);
+router.put('/messages/read/:conversationId', markAsRead);
+router.post('/call/start', startVideoCall);
+router.put('/call/update/:messageId', updateCallStatus);
 
 module.exports = router;

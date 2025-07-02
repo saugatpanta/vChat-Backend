@@ -1,78 +1,73 @@
 const validator = require('validator');
-const { StatusCodes } = require('http-status-codes');
+const User = require('../models/User');
 
-const validateRegisterInput = (data) => {
-  const errors = {};
+// Validate register input
+exports.validateRegisterInput = async (req, res, next) => {
+  const { username, email, password, confirmPassword } = req.body;
 
-  // Validate username
-  if (!data.username || data.username.trim() === '') {
-    errors.username = 'Username is required';
-  } else if (data.username.length < 3 || data.username.length > 20) {
-    errors.username = 'Username must be between 3 and 20 characters';
+  // Check if all fields are filled
+  if (!username || !email || !password || !confirmPassword) {
+    return res.status(400).json({
+      success: false,
+      error: 'Please fill in all fields'
+    });
   }
 
-  // Validate email
-  if (!data.email || data.email.trim() === '') {
-    errors.email = 'Email is required';
-  } else if (!validator.isEmail(data.email)) {
-    errors.email = 'Email is invalid';
+  // Check if username is valid
+  if (!validator.isLength(username, { min: 3, max: 20 })) {
+    return res.status(400).json({
+      success: false,
+      error: 'Username must be between 3 and 20 characters'
+    });
   }
 
-  // Validate password
-  if (!data.password || data.password.trim() === '') {
-    errors.password = 'Password is required';
-  } else if (data.password.length < 6) {
-    errors.password = 'Password must be at least 6 characters';
+  // Check if email is valid
+  if (!validator.isEmail(email)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Please provide a valid email'
+    });
   }
 
-  return {
-    errors,
-    isValid: Object.keys(errors).length === 0,
-  };
+  // Check if password is valid
+  if (!validator.isLength(password, { min: 6, max: 30 })) {
+    return res.status(400).json({
+      success: false,
+      error: 'Password must be between 6 and 30 characters'
+    });
+  }
+
+  // Check if passwords match
+  if (password !== confirmPassword) {
+    return res.status(400).json({
+      success: false,
+      error: 'Passwords do not match'
+    });
+  }
+
+  // Check if username or email already exists
+  const user = await User.findOne({ $or: [{ username }, { email }] });
+  if (user) {
+    return res.status(400).json({
+      success: false,
+      error: 'Username or email already exists'
+    });
+  }
+
+  next();
 };
 
-const validateLoginInput = (data) => {
-  const errors = {};
+// Validate login input
+exports.validateLoginInput = (req, res, next) => {
+  const { email, password } = req.body;
 
-  // Validate email
-  if (!data.email || data.email.trim() === '') {
-    errors.email = 'Email is required';
-  } else if (!validator.isEmail(data.email)) {
-    errors.email = 'Email is invalid';
+  // Check if all fields are filled
+  if (!email || !password) {
+    return res.status(400).json({
+      success: false,
+      error: 'Please fill in all fields'
+    });
   }
 
-  // Validate password
-  if (!data.password || data.password.trim() === '') {
-    errors.password = 'Password is required';
-  }
-
-  return {
-    errors,
-    isValid: Object.keys(errors).length === 0,
-  };
-};
-
-const validateStoryInput = (data) => {
-  const errors = {};
-
-  // Validate caption
-  if (data.caption && data.caption.length > 100) {
-    errors.caption = 'Caption must be less than 100 characters';
-  }
-
-  // Validate location
-  if (data.location && data.location.length > 50) {
-    errors.location = 'Location must be less than 50 characters';
-  }
-
-  return {
-    errors,
-    isValid: Object.keys(errors).length === 0,
-  };
-};
-
-module.exports = {
-  validateRegisterInput,
-  validateLoginInput,
-  validateStoryInput,
+  next();
 };

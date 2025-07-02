@@ -1,56 +1,37 @@
 const mongoose = require('mongoose');
 
-const storySchema = new mongoose.Schema({
+const StorySchema = new mongoose.Schema({
   user: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: mongoose.Schema.ObjectId,
     ref: 'User',
-    required: true,
+    required: true
+  },
+  text: {
+    type: String,
+    maxlength: [200, 'Story text cannot be more than 200 characters']
   },
   media: {
-    url: {
-      type: String,
-      required: true,
-    },
-    type: {
-      type: String,
-      enum: ['image', 'video'],
-      required: true,
-    },
-    duration: {
-      type: Number,
-      default: 7, // seconds
-    },
-  },
-  caption: {
     type: String,
-    maxlength: 100,
+    required: [true, 'Please upload a media file for your story']
   },
-  location: {
-    type: String,
-    maxlength: 50,
+  isMedia: {
+    type: Boolean,
+    default: true
   },
-  views: [
+  duration: {
+    type: Number,
+    default: 24 // hours
+  },
+  viewers: [
     {
-      user: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-      },
-      viewedAt: {
-        type: Date,
-        default: Date.now,
-      },
-    },
+      type: mongoose.Schema.ObjectId,
+      ref: 'User'
+    }
   ],
-  expiresAt: {
+  createdAt: {
     type: Date,
-    default: () => new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours
-  },
-}, {
-  timestamps: true,
+    default: Date.now
+  }
 });
 
-// Indexes
-storySchema.index({ user: 1, expiresAt: 1 });
-storySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
-
-module.exports = mongoose.model('Story', storySchema);
+module.exports = mongoose.model('Story', StorySchema);

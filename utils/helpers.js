@@ -1,27 +1,19 @@
-const jwt = require('jsonwebtoken');
-const { StatusCodes } = require('http-status-codes');
+const crypto = require('crypto');
+const cloudinary = require('cloudinary').v2;
 
-const generateToken = (id) => {
+// Generate token
+const createToken = (id) => {
   return jwt.sign({ id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN,
+    expiresIn: process.env.JWT_EXPIRE
   });
 };
 
-const generateResetToken = (id) => {
-  return jwt.sign({ id }, process.env.JWT_RESET_SECRET, {
-    expiresIn: '10m',
-  });
+// Generate random string
+const generateRandomString = (length) => {
+  return crypto.randomBytes(length).toString('hex');
 };
 
-const verifyResetToken = (token) => {
-  return jwt.verify(token, process.env.JWT_RESET_SECRET);
-};
-
-const paginate = (query, page = 1, limit = 10) => {
-  const skip = (page - 1) * limit;
-  return query.skip(skip).limit(limit);
-};
-
+// Filter object
 const filterObj = (obj, ...allowedFields) => {
   const newObj = {};
   Object.keys(obj).forEach((el) => {
@@ -30,27 +22,34 @@ const filterObj = (obj, ...allowedFields) => {
   return newObj;
 };
 
-const successResponse = (res, statusCode, data, message) => {
-  res.status(statusCode).json({
-    success: true,
-    message,
-    data,
+// Upload file to Cloudinary
+const uploadFile = async (file, folder) => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.upload(
+      file,
+      { folder: `vchat/${folder}` },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve(result);
+      }
+    );
   });
 };
 
-const errorResponse = (res, statusCode, message) => {
-  res.status(statusCode).json({
-    success: false,
-    message,
+// Delete file from Cloudinary
+const deleteFile = async (publicId) => {
+  return new Promise((resolve, reject) => {
+    cloudinary.uploader.destroy(publicId, (error, result) => {
+      if (error) return reject(error);
+      resolve(result);
+    });
   });
 };
 
 module.exports = {
-  generateToken,
-  generateResetToken,
-  verifyResetToken,
-  paginate,
+  createToken,
+  generateRandomString,
   filterObj,
-  successResponse,
-  errorResponse,
+  uploadFile,
+  deleteFile
 };

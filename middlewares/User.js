@@ -4,20 +4,12 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 
 const UserSchema = new mongoose.Schema({
-  name: {
-    type: String,
-    required: [true, 'Please add a name'],
-    trim: true,
-    maxlength: [50, 'Name cannot be more than 50 characters']
-  },
   username: {
     type: String,
     required: [true, 'Please add a username'],
     unique: true,
     trim: true,
-    maxlength: [30, 'Username cannot be more than 30 characters'],
-    lowercase: true,
-    match: [/^[a-zA-Z0-9_]+$/, 'Username can only contain letters, numbers and underscores']
+    maxlength: [20, 'Username cannot be more than 20 characters']
   },
   email: {
     type: String,
@@ -36,43 +28,30 @@ const UserSchema = new mongoose.Schema({
   },
   avatar: {
     type: String,
-    default: ''
+    default: 'https://res.cloudinary.com/demo/image/upload/v1621431234/default_avatar.png'
   },
   bio: {
     type: String,
     maxlength: [150, 'Bio cannot be more than 150 characters'],
     default: ''
   },
-  website: {
+  status: {
     type: String,
-    match: [
-      /https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)/,
-      'Please use a valid URL with HTTP or HTTPS'
-    ],
-    default: ''
+    enum: ['online', 'offline', 'away'],
+    default: 'offline'
   },
-  gender: {
-    type: String,
-    enum: ['male', 'female', 'other', 'prefer-not-to-say'],
-    default: 'prefer-not-to-say'
-  },
-  followers: [
-    {
-      type: mongoose.Schema.ObjectId,
-      ref: 'User'
-    }
-  ],
   following: [
     {
       type: mongoose.Schema.ObjectId,
       ref: 'User'
     }
   ],
-  verified: {
-    type: Boolean,
-    default: false
-  },
-  verificationToken: String,
+  followers: [
+    {
+      type: mongoose.Schema.ObjectId,
+      ref: 'User'
+    }
+  ],
   resetPasswordToken: String,
   resetPasswordExpire: Date,
   createdAt: {
@@ -115,23 +94,9 @@ UserSchema.methods.getResetPasswordToken = function() {
     .digest('hex');
 
   // Set expire
-  this.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
+  this.resetPasswordExpire = Date.now() + 10 * 60 * 1000;
 
   return resetToken;
-};
-
-// Generate email verification token
-UserSchema.methods.getVerificationToken = function() {
-  // Generate token
-  const verificationToken = crypto.randomBytes(20).toString('hex');
-
-  // Hash token and set to verificationToken field
-  this.verificationToken = crypto
-    .createHash('sha256')
-    .update(verificationToken)
-    .digest('hex');
-
-  return verificationToken;
 };
 
 module.exports = mongoose.model('User', UserSchema);

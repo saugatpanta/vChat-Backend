@@ -1,25 +1,23 @@
 const express = require('express');
 const router = express.Router();
-const userController = require('../controllers/userController');
+const {
+  getUser,
+  updateUser,
+  followUser,
+  unfollowUser,
+  searchUsers,
+  getSuggestions
+} = require('../controllers/userController');
 const { protect } = require('../middlewares/auth');
-const upload = require('../services/fileUpload');
 
-router.get('/', protect, userController.getUsers);
-router.get('/:userId', protect, userController.getUserProfile);
-router.put(
-  '/profile-picture',
-  protect,
-  upload.single('profilePicture'),
-  userController.updateProfilePicture
-);
-router.put(
-  '/cover-photo',
-  protect,
-  upload.single('coverPhoto'),
-  userController.updateCoverPhoto
-);
-router.put('/:userId/follow', protect, userController.followUser);
-router.get('/:userId/followers', protect, userController.getFollowers);
-router.get('/:userId/following', protect, userController.getFollowing);
+router.get('/:id', getUser);
+router.get('/search/:query', searchUsers);
+router.get('/suggestions', protect, getSuggestions);
+
+router.use(protect);
+
+router.put('/:id', updateUser);
+router.post('/:id/follow', followUser);
+router.post('/:id/unfollow', unfollowUser);
 
 module.exports = router;

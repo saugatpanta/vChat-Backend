@@ -1,207 +1,205 @@
-const asyncHandler = require('express-async-handler');
-const { StatusCodes } = require('http-status-codes');
 const User = require('../models/User');
-const { cloudinary } = require('../config/cloudinary');
-const logger = require('../middlewares/logger');
-
-// @desc    Get all users (search)
-// @route   GET /api/users
-// @access  Private
-const getUsers = asyncHandler(async (req, res) => {
-  const { search } = req.query;
-  const userId = req.user._id;
-
-  let query = {
-    _id: { $ne: userId },
-    status: 'active',
-  };
-
-  if (search) {
-    query.$or = [
-      { username: { $regex: search, $options: 'i' } },
-      { email: { $regex: search, $options: 'i' } },
-    ];
-  }
-
-  const users = await User.find(query)
-    .select('username profilePicture isOnline lastSeen')
-    .limit(20);
-
-  res.status(StatusCodes.OK).json(users);
-});
+const { upload } = require('../config/cloudinary');
 
 // @desc    Get user profile
-// @route   GET /api/users/:userId
+// @route   GET /api/users/:id
+// @access  Public
+exports.getUser = async (req, res, next) => {
+  try {
+    const user = await User.findById(req.params.id).select('-password');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: user
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Update user profile
+// @route   PUT /api/users/:id
 // @access  Private
-const getUserProfile = asyncHandler(async (req, res) => {
-  const { userId } = req.params;
+exports.updateUser = async (req, res, next) => {
+  try {
+    const { username, bio, status } = req.body;
+    let avatarUrl = '';
 
-  const user = await User.findById(userId)
-    .select('-password -settings -status -role')
-    .populate('followers', 'username profilePicture')
-    .populate('following', 'username profilePicture');
+    if (req.files && req.files.avatar) {
+      const result = await upload.single('avatar')(req, res);
+      avatarUrl = result.file.path;
+    }
 
-  if (!user) {
-    res.status(StatusCodes.NOT_FOUND);
-    throw new Error('User not found');
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      {
+        username,
+        bio,
+        status,
+        ...(avatarUrl && { avatar: avatarUrl })
+      },
+      { new: true }
+    ).select('-password');
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    // Check ownership
+    if (user._id.toString() !== req.user.id) {
+      return res.status(401).json({
+        success: false,
+        error: 'Not authorized to update this user'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: user
+    });
+  } catch (err) {
+    next(err);
   }
+};
 
-  res.status(StatusCodes.OK).json(user);
-});
-
-// @desc    Update user profile picture
-// @route   PUT /api/users/profile-picture
+// @desc    Follow user
+// @route   POST /api/users/:id/follow
 // @access  Private
-const updateProfilePicture = asyncHandler(async (req, res) => {
-  const userId = req.user._id;
+exports.followUser = async (req, res, next) => {
+  try {
+    const userToFollow = await User.findById(req.params.id);
+    const currentUser = await User.findById(req.user.id);
 
-  if (!req.file) {
-    res.status(StatusCodes.BAD_REQUEST);
-    throw new Error('Please upload a file');
-  }
+    if (!userToFollow) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
 
-  // Upload new picture to Cloudinary
-  const result = await cloudinary.uploader.upload(req.file.path, {
-    folder: 'vchat/profile-pictures',
-    width: 500,
-    height: 500,
-    crop: 'fill',
-  });
+    // Check if already following
+    if (currentUser.following.includes(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Already following this user'
+      });
+    }
 
-  // Delete old picture if it exists
-  const user = await User.findById(userId);
-  if (user.profilePicture) {
-    const publicId = user.profilePicture.split('/').pop().split('.')[0];
-    await cloudinary.uploader.destroy(`vchat/profile-pictures/${publicId}`);
-  }
-
-  // Update user profile picture
-  user.profilePicture = result.secure_url;
-  await user.save();
-
-  res.status(StatusCodes.OK).json({
-    profilePicture: user.profilePicture,
-  });
-});
-
-// @desc    Update user cover photo
-// @route   PUT /api/users/cover-photo
-// @access  Private
-const updateCoverPhoto = asyncHandler(async (req, res) => {
-  const userId = req.user._id;
-
-  if (!req.file) {
-    res.status(StatusCodes.BAD_REQUEST);
-    throw new Error('Please upload a file');
-  }
-
-  // Upload new cover photo to Cloudinary
-  const result = await cloudinary.uploader.upload(req.file.path, {
-    folder: 'vchat/cover-photos',
-    width: 1500,
-    height: 500,
-    crop: 'fill',
-  });
-
-  // Delete old cover photo if it exists
-  const user = await User.findById(userId);
-  if (user.coverPicture) {
-    const publicId = user.coverPicture.split('/').pop().split('.')[0];
-    await cloudinary.uploader.destroy(`vchat/cover-photos/${publicId}`);
-  }
-
-  // Update user cover photo
-  user.coverPicture = result.secure_url;
-  await user.save();
-
-  res.status(StatusCodes.OK).json({
-    coverPicture: user.coverPicture,
-  });
-});
-
-// @desc    Follow/Unfollow a user
-// @route   PUT /api/users/:userId/follow
-// @access  Private
-const followUser = asyncHandler(async (req, res) => {
-  const { userId } = req.params;
-  const currentUserId = req.user._id;
-
-  if (userId === currentUserId.toString()) {
-    res.status(StatusCodes.BAD_REQUEST);
-    throw new Error('You cannot follow yourself');
-  }
-
-  const userToFollow = await User.findById(userId);
-  const currentUser = await User.findById(currentUserId);
-
-  if (!userToFollow || !currentUser) {
-    res.status(StatusCodes.NOT_FOUND);
-    throw new Error('User not found');
-  }
-
-  const isFollowing = currentUser.following.includes(userId);
-
-  if (isFollowing) {
-    // Unfollow
-    currentUser.following.pull(userId);
-    userToFollow.followers.pull(currentUserId);
+    // Add to following list
+    currentUser.following.push(req.params.id);
     await currentUser.save();
+
+    // Add to followers list
+    userToFollow.followers.push(req.user.id);
     await userToFollow.save();
 
-    res.status(StatusCodes.OK).json({ message: 'User unfollowed' });
-  } else {
-    // Follow
-    currentUser.following.push(userId);
-    userToFollow.followers.push(currentUserId);
+    res.status(200).json({
+      success: true,
+      data: {}
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Unfollow user
+// @route   POST /api/users/:id/unfollow
+// @access  Private
+exports.unfollowUser = async (req, res, next) => {
+  try {
+    const userToUnfollow = await User.findById(req.params.id);
+    const currentUser = await User.findById(req.user.id);
+
+    if (!userToUnfollow) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+
+    // Check if not following
+    if (!currentUser.following.includes(req.params.id)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Not following this user'
+      });
+    }
+
+    // Remove from following list
+    currentUser.following = currentUser.following.filter(
+      id => id.toString() !== req.params.id
+    );
     await currentUser.save();
-    await userToFollow.save();
 
-    res.status(StatusCodes.OK).json({ message: 'User followed' });
+    // Remove from followers list
+    userToUnfollow.followers = userToUnfollow.followers.filter(
+      id => id.toString() !== req.user.id
+    );
+    await userToUnfollow.save();
+
+    res.status(200).json({
+      success: true,
+      data: {}
+    });
+  } catch (err) {
+    next(err);
   }
-});
+};
 
-// @desc    Get user's followers
-// @route   GET /api/users/:userId/followers
+// @desc    Search users
+// @route   GET /api/users/search/:query
+// @access  Public
+exports.searchUsers = async (req, res, next) => {
+  try {
+    const users = await User.find({
+      $or: [
+        { username: { $regex: req.params.query, $options: 'i' } },
+        { email: { $regex: req.params.query, $options: 'i' } }
+      ]
+    }).select('-password');
+
+    res.status(200).json({
+      success: true,
+      count: users.length,
+      data: users
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// @desc    Get user suggestions
+// @route   GET /api/users/suggestions
 // @access  Private
-const getFollowers = asyncHandler(async (req, res) => {
-  const { userId } = req.params;
+exports.getSuggestions = async (req, res, next) => {
+  try {
+    const currentUser = await User.findById(req.user.id);
+    const followingIds = currentUser.following.map(id => id.toString());
+    followingIds.push(req.user.id); // Exclude self
 
-  const user = await User.findById(userId)
-    .select('followers')
-    .populate('followers', 'username profilePicture isOnline');
+    // Get random users not already followed
+    const suggestions = await User.aggregate([
+      { $match: { _id: { $nin: followingIds.map(id => mongoose.Types.ObjectId(id)) } } },
+      { $sample: { size: 5 } },
+      { $project: { password: 0 } }
+    ]);
 
-  if (!user) {
-    res.status(StatusCodes.NOT_FOUND);
-    throw new Error('User not found');
+    res.status(200).json({
+      success: true,
+      count: suggestions.length,
+      data: suggestions
+    });
+  } catch (err) {
+    next(err);
   }
-
-  res.status(StatusCodes.OK).json(user.followers);
-});
-
-// @desc    Get user's following
-// @route   GET /api/users/:userId/following
-// @access  Private
-const getFollowing = asyncHandler(async (req, res) => {
-  const { userId } = req.params;
-
-  const user = await User.findById(userId)
-    .select('following')
-    .populate('following', 'username profilePicture isOnline');
-
-  if (!user) {
-    res.status(StatusCodes.NOT_FOUND);
-    throw new Error('User not found');
-  }
-
-  res.status(StatusCodes.OK).json(user.following);
-});
-
-module.exports = {
-  getUsers,
-  getUserProfile,
-  updateProfilePicture,
-  updateCoverPhoto,
-  followUser,
-  getFollowers,
-  getFollowing,
 };

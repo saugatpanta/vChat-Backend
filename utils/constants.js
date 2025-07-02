@@ -1,37 +1,22 @@
 module.exports = {
   USER_STATUS: {
-    ACTIVE: 'active',
-    INACTIVE: 'inactive',
-    SUSPENDED: 'suspended',
-  },
-  USER_ROLE: {
-    USER: 'user',
-    ADMIN: 'admin',
+    ONLINE: 'online',
+    OFFLINE: 'offline',
+    AWAY: 'away'
   },
   MESSAGE_TYPES: {
     TEXT: 'text',
     IMAGE: 'image',
     VIDEO: 'video',
     AUDIO: 'audio',
-    FILE: 'file',
-    CALL: 'call',
-  },
-  CALL_TYPES: {
-    VOICE: 'voice',
-    VIDEO: 'video',
+    FILE: 'file'
   },
   CALL_STATUS: {
-    MISSED: 'missed',
+    INITIATED: 'initiated',
     ANSWERED: 'answered',
-    DECLINED: 'declined',
+    REJECTED: 'rejected',
+    MISSED: 'missed',
+    ENDED: 'ended'
   },
-  THEMES: {
-    LIGHT: 'light',
-    DARK: 'dark',
-    SYSTEM: 'system',
-  },
-  STORY_TYPES: {
-    IMAGE: 'image',
-    VIDEO: 'video',
-  },
+  STORY_DURATION: 24 // hours
 };

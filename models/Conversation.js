@@ -1,58 +1,35 @@
 const mongoose = require('mongoose');
 
-const conversationSchema = new mongoose.Schema({
+const ConversationSchema = new mongoose.Schema({
   participants: [
     {
-      type: mongoose.Schema.Types.ObjectId,
+      type: mongoose.Schema.ObjectId,
       ref: 'User',
-      required: true,
-    },
+      required: true
+    }
   ],
-  isGroup: {
-    type: Boolean,
-    default: false,
-  },
-  groupName: {
-    type: String,
-    trim: true,
-  },
-  groupPhoto: {
-    type: String,
-  },
-  groupAdmin: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-  },
   lastMessage: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Message',
+    type: mongoose.Schema.ObjectId,
+    ref: 'Message'
   },
-  pinnedBy: [
-    {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
-  ],
-  mutedBy: [
-    {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
-  ],
-}, {
-  timestamps: true,
+  unreadCount: {
+    type: Number,
+    default: 0
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
 });
 
-// Indexes for faster querying
-conversationSchema.index({ participants: 1 });
-conversationSchema.index({ updatedAt: -1 });
-
-// Virtual for unread message count
-conversationSchema.virtual('unreadCount', {
-  ref: 'Message',
-  localField: '_id',
-  foreignField: 'conversation',
-  count: true,
+// Update the updatedAt field before saving
+ConversationSchema.pre('save', function(next) {
+  this.updatedAt = Date.now();
+  next();
 });
 
-module.exports = mongoose.model('Conversation', conversationSchema);
+module.exports = mongoose.model('Conversation', ConversationSchema);

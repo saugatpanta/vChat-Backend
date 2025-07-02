@@ -1,75 +1,48 @@
 const mongoose = require('mongoose');
 
-const messageSchema = new mongoose.Schema({
+const MessageSchema = new mongoose.Schema({
   conversation: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: mongoose.Schema.ObjectId,
     ref: 'Conversation',
-    required: true,
+    required: true
   },
   sender: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: mongoose.Schema.ObjectId,
     ref: 'User',
-    required: true,
-  },
-  recipient: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true,
+    required: true
   },
   text: {
     type: String,
-    trim: true,
+    maxlength: [1000, 'Message cannot be more than 1000 characters']
   },
-  media: [
-    {
-      url: String,
-      type: {
-        type: String,
-        enum: ['image', 'video', 'audio', 'file'],
-      },
-      filename: String,
-      size: Number,
-    },
-  ],
-  isRead: {
+  media: {
+    type: String
+  },
+  isMedia: {
     type: Boolean,
-    default: false,
+    default: false
   },
-  readAt: {
+  isCall: {
+    type: Boolean,
+    default: false
+  },
+  isVideoCall: {
+    type: Boolean,
+    default: false
+  },
+  callStatus: {
+    type: String,
+    enum: ['initiated', 'answered', 'rejected', 'missed', 'ended'],
+    default: 'initiated'
+  },
+  read: {
+    type: Boolean,
+    default: false
+  },
+  createdAt: {
     type: Date,
-  },
-  reactions: [
-    {
-      user: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-      },
-      emoji: String,
-    },
-  ],
-  deletedFor: [
-    {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
-  ],
-  call: {
-    type: {
-      type: String,
-      enum: ['voice', 'video'],
-    },
-    duration: Number,
-    status: {
-      type: String,
-      enum: ['missed', 'answered', 'declined'],
-    },
-  },
-}, {
-  timestamps: true,
+    default: Date.now
+  }
 });
 
-// Indexes for faster querying
-messageSchema.index({ conversation: 1, createdAt: -1 });
-messageSchema.index({ sender: 1, recipient: 1 });
-
-module.exports = mongoose.model('Message', messageSchema);
+module.exports = mongoose.model('Message', MessageSchema);

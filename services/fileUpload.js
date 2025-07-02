@@ -1,29 +1,20 @@
 const multer = require('multer');
-const { storage } = require('../config/cloudinary');
-const { StatusCodes } = require('http-status-codes');
+const { cloudinary } = require('../config/cloudinary');
+const { promisify } = require('util');
+const fs = require('fs');
+const unlinkAsync = promisify(fs.unlink);
 
-const upload = multer({
-  storage,
-  limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB
-  },
-  fileFilter: (req, file, cb) => {
-    const allowedTypes = [
-      'image/jpeg',
-      'image/png',
-      'image/gif',
-      'video/mp4',
-      'video/quicktime',
-    ];
+const uploadToCloudinary = async (file, options = {}) => {
+  try {
+    const result = await cloudinary.uploader.upload(file.path, options);
+    await unlinkAsync(file.path); // Delete file from server after upload
+    return result;
+  } catch (error) {
+    await unlinkAsync(file.path); // Ensure file is deleted even if upload fails
+    throw error;
+  }
+};
 
-    if (!allowedTypes.includes(file.mimetype)) {
-      const error = new Error('Invalid file type');
-      error.statusCode = StatusCodes.BAD_REQUEST;
-      return cb(error, false);
-    }
-
-    cb(null, true);
-  },
-});
-
-module.exports = upload;
+module.exports = {
+  uploadToCloudinary
+};
