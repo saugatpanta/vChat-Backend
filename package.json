@@ -28,7 +28,7 @@
     "socket.io": "^4.7.2",
     "validator": "^13.11.0",
     "xss-clean": "^0.1.1",
-    "uuid": "^9.0.1"s
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "jest": "^29.7.0",
