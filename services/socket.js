@@ -1,61 +1,61 @@
-module.exports = function(io) {
-  io.on('connection', socket => {
-    console.log(`User connected: ${socket.id}`);
+const Call = require('../models/Call');
+const Notification = require('../models/Notification');
+const WebRTCService = require('./webrtcService');
 
+module.exports = function(io, redisClient) {
+  io.on('connection', (socket) => {
+    console.log(`New connection: ${socket.id}`);
+    
     // Join user's room
-    socket.on('join', userId => {
+    socket.on('joinUser', (userId) => {
       socket.join(userId);
       console.log(`User ${userId} joined their room`);
     });
 
-    // Join conversation room
-    socket.on('joinConversation', conversationId => {
-      socket.join(conversationId);
-      console.log(`User joined conversation ${conversationId}`);
+    // Chat functionality
+    socket.on('sendMessage', async (message) => {
+      try {
+        const { conversationId, sender, text } = message;
+        socket.to(conversationId).emit('receiveMessage', message);
+      } catch (err) {
+        console.error('Error sending message:', err);
+      }
     });
 
-    // Leave conversation room
-    socket.on('leaveConversation', conversationId => {
-      socket.leave(conversationId);
-      console.log(`User left conversation ${conversationId}`);
+    // Call functionality
+    socket.on('initiateCall', async ({ caller, recipient, type }) => {
+      try {
+        const roomId = await WebRTCService.createRoom(caller, type);
+        socket.to(recipient).emit('incomingCall', { caller, roomId, type });
+        socket.emit('callInitiated', { roomId });
+      } catch (err) {
+        console.error('Error initiating call:', err);
+      }
     });
 
-    // Send and receive messages
-    socket.on('sendMessage', message => {
-      io.to(message.conversation).emit('receiveMessage', message);
+    socket.on('answerCall', async ({ roomId, answerer }) => {
+      try {
+        const roomInfo = await WebRTCService.getRoomInfo(roomId);
+        socket.to(roomInfo.host).emit('callAnswered', { answerer, roomId });
+        await WebRTCService.joinRoom(roomId, answerer);
+      } catch (err) {
+        console.error('Error answering call:', err);
+      }
     });
 
-    // Typing indicator
-    socket.on('typing', data => {
-      socket.to(data.conversationId).emit('typing', data.userId);
+    socket.on('endCall', async ({ roomId, userId }) => {
+      try {
+        const roomInfo = await WebRTCService.getRoomInfo(roomId);
+        socket.to(roomId).emit('callEnded', { endedBy: userId });
+        await WebRTCService.leaveRoom(roomId, userId);
+      } catch (err) {
+        console.error('Error ending call:', err);
+      }
     });
 
-    // Stop typing indicator
-    socket.on('stopTyping', data => {
-      socket.to(data.conversationId).emit('stopTyping', data.userId);
-    });
-
-    // Call handling
-    socket.on('callUser', data => {
-      io.to(data.recipientId).emit('callReceived', {
-        signal: data.signal,
-        callerId: data.callerId,
-        isVideo: data.isVideo,
-        conversationId: data.conversationId
-      });
-    });
-
-    socket.on('answerCall', data => {
-      io.to(data.callerId).emit('callAnswered', {
-        signal: data.signal,
-        conversationId: data.conversationId
-      });
-    });
-
-    socket.on('endCall', data => {
-      io.to(data.recipientId).emit('callEnded', {
-        conversationId: data.conversationId
-      });
+    // WebRTC signaling
+    socket.on('webrtc-signaling', ({ roomId, signal, sender }) => {
+      socket.to(roomId).emit('webrtc-signaling', { signal, sender });
     });
 
     // Disconnect

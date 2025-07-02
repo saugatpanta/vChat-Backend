@@ -10,119 +10,108 @@ const userSchema = new mongoose.Schema({
     unique: true,
     trim: true,
     minlength: [3, 'Username must be at least 3 characters'],
-    maxlength: [20, 'Username cannot exceed 20 characters'],
+    maxlength: [20, 'Username cannot exceed 20 characters']
   },
   email: {
     type: String,
     required: [true, 'Please provide an email'],
     unique: true,
     lowercase: true,
-    validate: [validator.isEmail, 'Please provide a valid email'],
+    validate: [validator.isEmail, 'Please provide a valid email']
   },
   password: {
     type: String,
     required: [true, 'Please provide a password'],
     minlength: [6, 'Password must be at least 6 characters'],
-    select: false,
+    select: false
   },
-  profilePicture: {
+  avatar: {
     type: String,
-    default: '',
+    default: 'default.jpg'
   },
-  coverPicture: {
+  coverPhoto: {
     type: String,
-    default: '',
+    default: 'default-cover.jpg'
   },
   bio: {
     type: String,
-    maxlength: [150, 'Bio cannot exceed 150 characters'],
-    default: '',
+    maxlength: [150, 'Bio cannot exceed 150 characters']
   },
-  followers: [
-    {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
-  ],
-  following: [
-    {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
-    },
-  ],
-  isOnline: {
+  website: {
+    type: String,
+    validate: [validator.isURL, 'Please provide a valid URL']
+  },
+  followers: [{
+    type: mongoose.Schema.ObjectId,
+    ref: 'User'
+  }],
+  following: [{
+    type: mongoose.Schema.ObjectId,
+    ref: 'User'
+  }],
+  isVerified: {
     type: Boolean,
-    default: false,
+    default: false
   },
   lastSeen: {
     type: Date,
-    default: Date.now,
+    default: Date.now
   },
   status: {
     type: String,
-    enum: ['active', 'inactive', 'suspended'],
-    default: 'active',
-  },
-  role: {
-    type: String,
-    enum: ['user', 'admin'],
-    default: 'user',
+    enum: ['online', 'offline', 'away'],
+    default: 'offline'
   },
   settings: {
-    theme: {
-      type: String,
-      enum: ['light', 'dark', 'system'],
-      default: 'system',
-    },
     notifications: {
-      email: {
-        type: Boolean,
-        default: true,
-      },
-      push: {
-        type: Boolean,
-        default: true,
-      },
+      type: Boolean,
+      default: true
     },
-  },
+    privacy: {
+      type: String,
+      enum: ['public', 'private'],
+      default: 'public'
+    }
+  }
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
-  toObject: { virtuals: true },
+  toObject: { virtuals: true }
 });
 
 // Hash password before saving
-userSchema.pre('save', async function (next) {
+userSchema.pre('save', async function(next) {
   if (!this.isModified('password')) return next();
   this.password = await bcrypt.hash(this.password, 12);
   next();
 });
 
 // Generate JWT token
-userSchema.methods.generateAuthToken = function () {
+userSchema.methods.generateAuthToken = function() {
   return jwt.sign({ id: this._id }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN,
+    expiresIn: process.env.JWT_EXPIRES_IN
   });
 };
 
-// Compare password
-userSchema.methods.comparePassword = async function (candidatePassword) {
-  return await bcrypt.compare(candidatePassword, this.password);
+// Check if password matches
+userSchema.methods.matchPassword = async function(enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
 };
 
-// Virtual for full name
-userSchema.virtual('fullName').get(function () {
-  return `${this.firstName} ${this.lastName}`;
-});
-
 // Virtual for follower count
-userSchema.virtual('followerCount').get(function () {
+userSchema.virtual('followerCount').get(function() {
   return this.followers.length;
 });
 
 // Virtual for following count
-userSchema.virtual('followingCount').get(function () {
+userSchema.virtual('followingCount').get(function() {
   return this.following.length;
+});
+
+// Update last seen before query
+userSchema.pre(/^find/, function(next) {
+  this.select('-__v -password');
+  next();
 });
 
 module.exports = mongoose.model('User', userSchema);
