@@ -14,7 +14,8 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.0.3",
     "path-to-regexp": "^6.2.1",
-    "socket.io": "^4.7.2"
+    "socket.io": "^4.7.2",
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
