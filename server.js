@@ -6,6 +6,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const socketIO = require('socket.io');
 const { v4: uuidv4 } = require('uuid');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -238,6 +239,73 @@ app.post('/api/token', async (req, res) => {
   }
 });
 
+// Password Reset Routes
+app.post('/api/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+    
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const resetToken = jwt.sign(
+      { userId: user.userId },
+      process.env.RESET_TOKEN_SECRET,
+      { expiresIn: '1h' }
+    );
+    
+    user.resetToken = resetToken;
+    user.resetTokenExpiry = Date.now() + 3600000; // 1 hour
+    await user.save();
+    
+    // In production, you would send an email here
+    res.json({ 
+      message: 'Password reset token generated',
+      resetToken // In production, don't send this in response
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.post('/api/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    
+    if (!token || !newPassword) {
+      return res.status(400).json({ message: 'Token and new password are required' });
+    }
+    
+    const decoded = jwt.verify(token, process.env.RESET_TOKEN_SECRET);
+    const user = await User.findOne({ 
+      userId: decoded.userId,
+      resetToken: token,
+      resetTokenExpiry: { $gt: Date.now() }
+    });
+    
+    if (!user) {
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
+    
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    user.password = hashedPassword;
+    user.resetToken = undefined;
+    user.resetTokenExpiry = undefined;
+    await user.save();
+    
+    res.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
 // Protected Routes
 app.get('/api/users', authenticateJWT, async (req, res) => {
   try {
@@ -247,6 +315,24 @@ app.get('/api/users', authenticateJWT, async (req, res) => {
     res.json(users);
   } catch (error) {
     console.error('Get users error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+app.get('/api/messages/:userId', authenticateJWT, async (req, res) => {
+  try {
+    const messages = await Message.find({
+      $or: [
+        { sender: req.user.userId, receiver: req.params.userId },
+        { sender: req.params.userId, receiver: req.user.userId }
+      ]
+    })
+    .sort('createdAt')
+    .populate('sender receiver', 'userId username avatar');
+    
+    res.json(messages);
+  } catch (error) {
+    console.error('Get messages error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
@@ -318,6 +404,12 @@ io.on('connection', (socket) => {
       user.lastSeen = new Date();
       await user.save();
       
+      // Notify others this user is online
+      socket.broadcast.emit('userStatusChanged', {
+        userId: user.userId,
+        status: 'online'
+      });
+      
       socket.emit('authenticated');
     } catch (error) {
       socket.emit('authentication_error', 'Invalid token');
@@ -335,6 +427,12 @@ io.on('connection', (socket) => {
         user.status = 'offline';
         user.lastSeen = new Date();
         await user.save();
+        
+        // Notify others this user is offline
+        socket.broadcast.emit('userStatusChanged', {
+          userId: user.userId,
+          status: 'offline'
+        });
       }
     }
   });
@@ -366,6 +464,16 @@ io.on('connection', (socket) => {
     } catch (error) {
       console.error('Message send error:', error);
       socket.emit('error', 'Failed to send message');
+    }
+  });
+  
+  // Typing indicator
+  socket.on('typing', (data) => {
+    if (socket.userId && data.receiverId) {
+      io.to(data.receiverId).emit('typing', {
+        senderId: socket.userId,
+        isTyping: data.isTyping
+      });
     }
   });
 });
