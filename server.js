@@ -5,45 +5,63 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const socketIO = require('socket.io');
-const path = require('path');
+const { v4: uuidv4 } = require('uuid');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Enhanced CORS configuration
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
+];
+
 const corsOptions = {
-  origin: [
-    process.env.FRONTEND_URL, // Your Vercel frontend URL
-    'http://localhost:3000'   // For local development
-  ],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
 };
 
-// Middleware
 app.use(cors(corsOptions));
 app.use(express.json());
+app.options('*', cors(corsOptions)); // Enable preflight for all routes
 
-// Remove static file serving since frontend is on Vercel
-// app.use(express.static(path.join(__dirname, 'public')));
-
-// MongoDB Connection (updated without deprecated options)
+// MongoDB Connection
 mongoose.connect(process.env.MONGODB_URI)
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => {
     console.error('MongoDB connection error:', err);
-    process.exit(1); // Exit if DB connection fails
+    process.exit(1);
   });
 
-// User Schema
+// Enhanced User Schema
 const userSchema = new mongoose.Schema({
-  username: { type: String, required: true, unique: true },
-  email: { type: String, required: true, unique: true },
-  password: { type: String, required: true },
+  userId: { type: String, default: uuidv4, unique: true },
+  username: { type: String, required: true, unique: true, trim: true },
+  email: { 
+    type: String, 
+    required: true, 
+    unique: true,
+    validate: {
+      validator: function(v) {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+      },
+      message: props => `${props.value} is not a valid email!`
+    }
+  },
+  password: { type: String, required: true, minlength: 8 },
   avatar: { type: String, default: 'default-avatar.png' },
-  status: { type: String, default: 'offline' },
+  status: { type: String, enum: ['online', 'offline', 'away'], default: 'offline' },
   lastSeen: { type: Date, default: Date.now },
+  refreshToken: String,
   resetToken: String,
   resetTokenExpiry: Date
 }, { timestamps: true });
@@ -52,21 +70,60 @@ const User = mongoose.model('User', userSchema);
 
 // Message Schema
 const messageSchema = new mongoose.Schema({
+  messageId: { type: String, default: uuidv4, unique: true },
   sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   receiver: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   content: { type: String, required: true },
-  type: { type: String, enum: ['text', 'voice', 'image'], default: 'text' },
-  read: { type: Boolean, default: false }
+  type: { type: String, enum: ['text', 'voice', 'image', 'video'], default: 'text' },
+  read: { type: Boolean, default: false },
+  delivered: { type: Boolean, default: false }
 }, { timestamps: true });
 
 const Message = mongoose.model('Message', messageSchema);
 
-// Authentication Routes
+// JWT Helper Functions
+const generateTokens = (userId) => {
+  const accessToken = jwt.sign(
+    { userId },
+    process.env.ACCESS_TOKEN_SECRET,
+    { expiresIn: '15m' }
+  );
+  
+  const refreshToken = jwt.sign(
+    { userId },
+    process.env.REFRESH_TOKEN_SECRET,
+    { expiresIn: '7d' }
+  );
+  
+  return { accessToken, refreshToken };
+};
+
+// Authentication Middleware
+const authenticateJWT = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader) {
+    return res.status(401).json({ message: 'Authorization header missing' });
+  }
+
+  const token = authHeader.split(' ')[1];
+  
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, user) => {
+    if (err) {
+      return res.status(403).json({ message: 'Invalid or expired token' });
+    }
+    
+    req.user = user;
+    next();
+  });
+};
+
+// Routes
 app.post('/api/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
     
-    // Validate input
+    // Validation
     if (!username || !email || !password) {
       return res.status(400).json({ message: 'All fields are required' });
     }
@@ -83,15 +140,21 @@ app.post('/api/register', async (req, res) => {
       password: hashedPassword
     });
     
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
+    const { accessToken, refreshToken } = generateTokens(user.userId);
+    
+    // Save refresh token to DB
+    user.refreshToken = refreshToken;
+    await user.save();
     
     res.status(201).json({ 
-      token, 
+      accessToken,
+      refreshToken,
       user: { 
-        id: user._id, 
+        userId: user.userId,
         username: user.username, 
         email: user.email, 
-        avatar: user.avatar 
+        avatar: user.avatar,
+        status: user.status
       } 
     });
   } catch (error) {
@@ -118,17 +181,19 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
     
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
+    const { accessToken, refreshToken } = generateTokens(user.userId);
     
-    // Update user status
+    // Update user status and refresh token
     user.status = 'online';
     user.lastSeen = new Date();
+    user.refreshToken = refreshToken;
     await user.save();
     
     res.json({ 
-      token, 
+      accessToken,
+      refreshToken,
       user: { 
-        id: user._id, 
+        userId: user.userId,
         username: user.username, 
         email: user.email, 
         avatar: user.avatar, 
@@ -141,111 +206,43 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Password Reset Routes
-app.post('/api/forgot-password', async (req, res) => {
-  try {
-    const { email } = req.body;
-    
-    if (!email) {
-      return res.status(400).json({ message: 'Email is required' });
-    }
-    
-    const user = await User.findOne({ email });
-    if (!user) {
-      // Don't reveal whether email exists for security
-      return res.json({ message: 'If an account exists, a reset link has been sent' });
-    }
-    
-    const resetToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
-    user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000; // 1 hour
-    await user.save();
-    
-    // In production, you would send an email here
-    console.log('Reset token:', resetToken); // For development only
-    
-    res.json({ message: 'If an account exists, a reset link has been sent' });
-  } catch (error) {
-    console.error('Forgot password error:', error);
-    res.status(500).json({ message: 'Server error' });
+app.post('/api/token', async (req, res) => {
+  const { refreshToken } = req.body;
+  
+  if (!refreshToken) {
+    return res.status(401).json({ message: 'Refresh token required' });
   }
-});
-
-app.post('/api/reset-password', async (req, res) => {
+  
   try {
-    const { token, newPassword } = req.body;
-    
-    if (!token || !newPassword) {
-      return res.status(400).json({ message: 'Token and new password are required' });
+    const user = await User.findOne({ refreshToken });
+    if (!user) {
+      return res.status(403).json({ message: 'Invalid refresh token' });
     }
     
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findOne({ 
-      _id: decoded.id, 
-      resetToken: token, 
-      resetTokenExpiry: { $gt: Date.now() } 
+    jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, (err, decoded) => {
+      if (err || user.userId !== decoded.userId) {
+        return res.status(403).json({ message: 'Invalid refresh token' });
+      }
+      
+      const { accessToken, refreshToken: newRefreshToken } = generateTokens(user.userId);
+      
+      // Update refresh token in DB
+      user.refreshToken = newRefreshToken;
+      user.save();
+      
+      res.json({ accessToken, refreshToken: newRefreshToken });
     });
-    
-    if (!user) {
-      return res.status(400).json({ message: 'Invalid or expired token' });
-    }
-    
-    user.password = await bcrypt.hash(newPassword, 12);
-    user.resetToken = undefined;
-    user.resetTokenExpiry = undefined;
-    await user.save();
-    
-    res.json({ message: 'Password reset successfully' });
   } catch (error) {
-    console.error('Reset password error:', error);
+    console.error('Token refresh error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Chat Routes with improved error handling
-app.get('/api/messages/:userId', async (req, res) => {
+// Protected Routes
+app.get('/api/users', authenticateJWT, async (req, res) => {
   try {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ message: 'Authorization token required' });
-    }
-    
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const { userId } = req.params;
-    
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(400).json({ message: 'Invalid user ID' });
-    }
-    
-    const messages = await Message.find({
-      $or: [
-        { sender: decoded.id, receiver: userId },
-        { sender: userId, receiver: decoded.id }
-      ]
-    })
-    .sort({ createdAt: 1 })
-    .populate('sender receiver', 'username avatar');
-    
-    res.json(messages);
-  } catch (error) {
-    console.error('Get messages error:', error);
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({ message: 'Invalid token' });
-    }
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.get('/api/users', async (req, res) => {
-  try {
-    const token = req.headers.authorization?.split(' ')[1];
-    if (!token) {
-      return res.status(401).json({ message: 'Authorization token required' });
-    }
-    
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const users = await User.find({ _id: { $ne: decoded.id } })
-      .select('-password -resetToken -resetTokenExpiry');
+    const users = await User.find({ userId: { $ne: req.user.userId } })
+      .select('-password -refreshToken -resetToken -resetTokenExpiry');
     
     res.json(users);
   } catch (error) {
@@ -259,12 +256,13 @@ app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
-    dbStatus: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    dbStatus: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    uptime: process.uptime()
   });
 });
 
-// Updated catch-all route for API
-app.get('*', (req, res) => {
+// 404 Handler for API routes
+app.use('/api', (req, res) => {
   res.status(404).json({ 
     success: false, 
     message: 'API endpoint not found',
@@ -280,15 +278,15 @@ const server = app.listen(PORT, () => {
 // Enhanced Socket.IO setup
 const io = socketIO(server, {
   cors: {
-    origin: corsOptions.origin,
-    methods: corsOptions.methods,
+    origin: allowedOrigins,
+    methods: ['GET', 'POST'],
     credentials: true
   },
   pingTimeout: 60000,
   pingInterval: 25000
 });
 
-// Socket.IO connection handling with improved reliability
+// Socket.IO connection handling
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`);
   
@@ -301,24 +299,57 @@ io.on('connection', (socket) => {
     console.log(`Heartbeat received from ${socket.id}`);
   });
   
-  socket.on('join', (userId) => {
-    if (!userId) {
-      console.warn('No userId provided for join');
-      return;
-    }
-    socket.join(userId);
-    console.log(`User ${userId} joined room`);
-  });
-  
-  socket.on('sendMessage', async ({ senderId, receiverId, content, type }) => {
+  socket.on('authenticate', async (token) => {
     try {
-      if (!senderId || !receiverId || !content) {
-        console.warn('Invalid message data received');
-        return;
+      const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+      const user = await User.findOne({ userId: decoded.userId });
+      
+      if (!user) {
+        socket.emit('authentication_error', 'User not found');
+        return socket.disconnect();
       }
       
+      socket.userId = user.userId;
+      socket.join(user.userId);
+      console.log(`User ${user.username} authenticated`);
+      
+      // Update user status
+      user.status = 'online';
+      user.lastSeen = new Date();
+      await user.save();
+      
+      socket.emit('authenticated');
+    } catch (error) {
+      socket.emit('authentication_error', 'Invalid token');
+      socket.disconnect();
+    }
+  });
+  
+  socket.on('disconnect', async () => {
+    console.log(`Client disconnected: ${socket.id}`);
+    clearInterval(heartbeatInterval);
+    
+    if (socket.userId) {
+      const user = await User.findOne({ userId: socket.userId });
+      if (user) {
+        user.status = 'offline';
+        user.lastSeen = new Date();
+        await user.save();
+      }
+    }
+  });
+  
+  // Message handling
+  socket.on('sendMessage', async (messageData) => {
+    try {
+      if (!socket.userId) {
+        return socket.emit('error', 'Not authenticated');
+      }
+      
+      const { receiverId, content, type } = messageData;
+      
       const message = await Message.create({
-        sender: senderId,
+        sender: socket.userId,
         receiver: receiverId,
         content,
         type
@@ -326,74 +357,45 @@ io.on('connection', (socket) => {
       
       const populatedMessage = await Message.populate(message, {
         path: 'sender receiver',
-        select: 'username avatar'
+        select: 'userId username avatar'
       });
       
+      // Emit to sender and receiver
+      io.to(socket.userId).emit('messageSent', populatedMessage);
       io.to(receiverId).emit('receiveMessage', populatedMessage);
-      socket.emit('messageSent', populatedMessage);
     } catch (error) {
-      console.error('Error sending message:', error);
+      console.error('Message send error:', error);
+      socket.emit('error', 'Failed to send message');
     }
-  });
-  
-  // Enhanced call handling
-  socket.on('callUser', ({ from, to, signal, callType }) => {
-    if (!from || !to || !signal || !callType) {
-      console.warn('Invalid call data received');
-      return;
-    }
-    io.to(to).emit('incomingCall', { from, signal, callType });
-  });
-  
-  socket.on('acceptCall', ({ to, signal }) => {
-    if (!to || !signal) {
-      console.warn('Invalid accept call data received');
-      return;
-    }
-    io.to(to).emit('callAccepted', signal);
-  });
-  
-  socket.on('rejectCall', ({ to }) => {
-    if (!to) {
-      console.warn('Invalid reject call data received');
-      return;
-    }
-    io.to(to).emit('callRejected');
-  });
-  
-  socket.on('endCall', ({ to }) => {
-    if (!to) {
-      console.warn('Invalid end call data received');
-      return;
-    }
-    io.to(to).emit('callEnded');
-  });
-  
-  socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
-    clearInterval(heartbeatInterval);
   });
 });
 
 // Graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received. Shutting down gracefully...');
-  server.close(() => {
-    console.log('Server closed');
-    mongoose.connection.close(false, () => {
-      console.log('MongoDB connection closed');
-      process.exit(0);
+const shutdown = async () => {
+  console.log('Shutting down gracefully...');
+  
+  try {
+    // Update all online users to offline
+    await User.updateMany(
+      { status: 'online' },
+      { $set: { status: 'offline', lastSeen: new Date() } }
+    );
+    
+    // Close server
+    server.close(() => {
+      console.log('Server closed');
+      
+      // Close MongoDB connection
+      mongoose.connection.close(false, () => {
+        console.log('MongoDB connection closed');
+        process.exit(0);
+      });
     });
-  });
-});
+  } catch (error) {
+    console.error('Error during shutdown:', error);
+    process.exit(1);
+  }
+};
 
-process.on('SIGINT', () => {
-  console.log('SIGINT received. Shutting down gracefully...');
-  server.close(() => {
-    console.log('Server closed');
-    mongoose.connection.close(false, () => {
-      console.log('MongoDB connection closed');
-      process.exit(0);
-    });
-  });
-});
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
