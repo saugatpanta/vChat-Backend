@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const socketIO = require('socket.io');
+const { Server } = require('socket.io');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 
@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 5000;
 
 // Enhanced CORS configuration
 const allowedOrigins = [
-  process.env.FRONTEND_URL,
+  'https://v-chat-frontend.vercel.app',
   'http://localhost:3000',
   'http://127.0.0.1:3000'
 ];
@@ -33,17 +33,20 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
-app.options('*', cors(corsOptions)); // Enable preflight for all routes
+app.options('*', cors(corsOptions));
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log('Connected to MongoDB'))
-  .catch(err => {
-    console.error('MongoDB connection error:', err);
-    process.exit(1);
-  });
+mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/vchat', {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+})
+.then(() => console.log('Connected to MongoDB'))
+.catch(err => {
+  console.error('MongoDB connection error:', err);
+  process.exit(1);
+});
 
-// Enhanced User Schema
+// User Schema
 const userSchema = new mongoose.Schema({
   userId: { type: String, default: uuidv4, unique: true },
   username: { type: String, required: true, unique: true, trim: true },
@@ -86,13 +89,13 @@ const Message = mongoose.model('Message', messageSchema);
 const generateTokens = (userId) => {
   const accessToken = jwt.sign(
     { userId },
-    process.env.ACCESS_TOKEN_SECRET,
+    process.env.ACCESS_TOKEN_SECRET || 'your_access_token_secret',
     { expiresIn: '15m' }
   );
   
   const refreshToken = jwt.sign(
     { userId },
-    process.env.REFRESH_TOKEN_SECRET,
+    process.env.REFRESH_TOKEN_SECRET || 'your_refresh_token_secret',
     { expiresIn: '7d' }
   );
   
@@ -109,7 +112,7 @@ const authenticateJWT = (req, res, next) => {
 
   const token = authHeader.split(' ')[1];
   
-  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET, (err, user) => {
+  jwt.verify(token, process.env.ACCESS_TOKEN_SECRET || 'your_access_token_secret', (err, user) => {
     if (err) {
       return res.status(403).json({ message: 'Invalid or expired token' });
     }
@@ -124,7 +127,6 @@ app.post('/api/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
     
-    // Validation
     if (!username || !email || !password) {
       return res.status(400).json({ message: 'All fields are required' });
     }
@@ -143,7 +145,6 @@ app.post('/api/register', async (req, res) => {
     
     const { accessToken, refreshToken } = generateTokens(user.userId);
     
-    // Save refresh token to DB
     user.refreshToken = refreshToken;
     await user.save();
     
@@ -184,7 +185,6 @@ app.post('/api/login', async (req, res) => {
     
     const { accessToken, refreshToken } = generateTokens(user.userId);
     
-    // Update user status and refresh token
     user.status = 'online';
     user.lastSeen = new Date();
     user.refreshToken = refreshToken;
@@ -207,105 +207,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-app.post('/api/token', async (req, res) => {
-  const { refreshToken } = req.body;
-  
-  if (!refreshToken) {
-    return res.status(401).json({ message: 'Refresh token required' });
-  }
-  
-  try {
-    const user = await User.findOne({ refreshToken });
-    if (!user) {
-      return res.status(403).json({ message: 'Invalid refresh token' });
-    }
-    
-    jwt.verify(refreshToken, process.env.REFRESH_TOKEN_SECRET, (err, decoded) => {
-      if (err || user.userId !== decoded.userId) {
-        return res.status(403).json({ message: 'Invalid refresh token' });
-      }
-      
-      const { accessToken, refreshToken: newRefreshToken } = generateTokens(user.userId);
-      
-      // Update refresh token in DB
-      user.refreshToken = newRefreshToken;
-      user.save();
-      
-      res.json({ accessToken, refreshToken: newRefreshToken });
-    });
-  } catch (error) {
-    console.error('Token refresh error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Password Reset Routes
-app.post('/api/forgot-password', async (req, res) => {
-  try {
-    const { email } = req.body;
-    
-    if (!email) {
-      return res.status(400).json({ message: 'Email is required' });
-    }
-    
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-    
-    const resetToken = jwt.sign(
-      { userId: user.userId },
-      process.env.RESET_TOKEN_SECRET,
-      { expiresIn: '1h' }
-    );
-    
-    user.resetToken = resetToken;
-    user.resetTokenExpiry = Date.now() + 3600000; // 1 hour
-    await user.save();
-    
-    res.json({ 
-      message: 'Password reset token generated',
-      resetToken
-    });
-  } catch (error) {
-    console.error('Forgot password error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-app.post('/api/reset-password', async (req, res) => {
-  try {
-    const { token, newPassword } = req.body;
-    
-    if (!token || !newPassword) {
-      return res.status(400).json({ message: 'Token and new password are required' });
-    }
-    
-    const decoded = jwt.verify(token, process.env.RESET_TOKEN_SECRET);
-    const user = await User.findOne({ 
-      userId: decoded.userId,
-      resetToken: token,
-      resetTokenExpiry: { $gt: Date.now() }
-    });
-    
-    if (!user) {
-      return res.status(400).json({ message: 'Invalid or expired token' });
-    }
-    
-    const hashedPassword = await bcrypt.hash(newPassword, 12);
-    user.password = hashedPassword;
-    user.resetToken = undefined;
-    user.resetTokenExpiry = undefined;
-    await user.save();
-    
-    res.json({ message: 'Password reset successfully' });
-  } catch (error) {
-    console.error('Reset password error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
-// Protected Routes
 app.get('/api/users', authenticateJWT, async (req, res) => {
   try {
     const users = await User.find({ userId: { $ne: req.user.userId } })
@@ -346,31 +247,22 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Root endpoint
-app.get('/', (req, res) => {
-  res.json({
-    message: 'vChat API Server',
-    status: 'running',
-    documentation: 'https://github.com/your-repo/docs'
+// Serve static files in production
+if (process.env.NODE_ENV === 'production') {
+  app.use(express.static(path.join(__dirname, 'client/build')));
+  
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'client/build', 'index.html'));
   });
-});
-
-// 404 Handler for API routes
-app.use('/api', (req, res) => {
-  res.status(404).json({ 
-    success: false, 
-    message: 'API endpoint not found',
-    documentation: 'https://github.com/your-repo/docs' 
-  });
-});
+}
 
 // Start server
 const server = app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
 
-// Enhanced Socket.IO setup
-const io = socketIO(server, {
+// Socket.IO setup
+const io = new Server(server, {
   cors: {
     origin: allowedOrigins,
     methods: ['GET', 'POST'],
@@ -384,18 +276,9 @@ const io = socketIO(server, {
 io.on('connection', (socket) => {
   console.log(`Client connected: ${socket.id}`);
   
-  // Heartbeat monitoring
-  let heartbeatInterval = setInterval(() => {
-    socket.emit('ping');
-  }, 20000);
-  
-  socket.on('pong', () => {
-    console.log(`Heartbeat received from ${socket.id}`);
-  });
-  
   socket.on('authenticate', async (token) => {
     try {
-      const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET);
+      const decoded = jwt.verify(token, process.env.ACCESS_TOKEN_SECRET || 'your_access_token_secret');
       const user = await User.findOne({ userId: decoded.userId });
       
       if (!user) {
@@ -405,15 +288,12 @@ io.on('connection', (socket) => {
       
       socket.userId = user.userId;
       socket.join(user.userId);
-      console.log(`User ${user.username} authenticated`);
       
-      // Update user status
       user.status = 'online';
       user.lastSeen = new Date();
       await user.save();
       
-      // Notify others this user is online
-      socket.broadcast.emit('userStatusChanged', {
+      io.emit('userStatusChanged', {
         userId: user.userId,
         status: 'online'
       });
@@ -427,7 +307,6 @@ io.on('connection', (socket) => {
   
   socket.on('disconnect', async () => {
     console.log(`Client disconnected: ${socket.id}`);
-    clearInterval(heartbeatInterval);
     
     if (socket.userId) {
       const user = await User.findOne({ userId: socket.userId });
@@ -436,8 +315,7 @@ io.on('connection', (socket) => {
         user.lastSeen = new Date();
         await user.save();
         
-        // Notify others this user is offline
-        socket.broadcast.emit('userStatusChanged', {
+        io.emit('userStatusChanged', {
           userId: user.userId,
           status: 'offline'
         });
@@ -445,7 +323,6 @@ io.on('connection', (socket) => {
     }
   });
   
-  // Message handling
   socket.on('sendMessage', async (messageData) => {
     try {
       if (!socket.userId) {
@@ -466,7 +343,6 @@ io.on('connection', (socket) => {
         select: 'userId username avatar'
       });
       
-      // Emit to sender and receiver
       io.to(socket.userId).emit('messageSent', populatedMessage);
       io.to(receiverId).emit('receiveMessage', populatedMessage);
     } catch (error) {
@@ -475,7 +351,6 @@ io.on('connection', (socket) => {
     }
   });
   
-  // Typing indicator
   socket.on('typing', (data) => {
     if (socket.userId && data.receiverId) {
       io.to(data.receiverId).emit('typing', {
@@ -491,17 +366,13 @@ const shutdown = async () => {
   console.log('Shutting down gracefully...');
   
   try {
-    // Update all online users to offline
     await User.updateMany(
       { status: 'online' },
       { $set: { status: 'offline', lastSeen: new Date() } }
     );
     
-    // Close server
     server.close(() => {
       console.log('Server closed');
-      
-      // Close MongoDB connection
       mongoose.connection.close(false, () => {
         console.log('MongoDB connection closed');
         process.exit(0);
