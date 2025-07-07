@@ -16,7 +16,7 @@ const PORT = process.env.PORT || 5000;
 
 // Enhanced CORS configuration
 const allowedOrigins = [
-  'https://v-chat-frontend.vercel.app',
+  'https://v-chat-frontend-gamma.vercel.app/',
   'http://localhost:3000',
   'http://127.0.0.1:3000'
 ];
@@ -867,7 +867,7 @@ app.post('/api/messages/react', authenticateJWT, async (req, res) => {
     
     // Check if user already reacted
     const existingReactionIndex = message.reactions.findIndex(
-      r => r.userId.equals(req.user._id))
+      r => r.userId.equals(req.user._id)
     );
     
     if (existingReactionIndex !== -1) {
