@@ -54,16 +54,13 @@ app.post('/api/register', async (req, res) => {
     try {
         const { username, email, password } = req.body;
         
-        // Check if user exists
         const existingUser = await User.findOne({ $or: [{ username }, { email }] });
         if (existingUser) {
             return res.status(400).json({ message: 'Username or email already exists' });
         }
         
-        // Hash password
         const hashedPassword = await bcrypt.hash(password, 10);
         
-        // Create user
         const user = new User({
             username,
             email,
@@ -72,10 +69,17 @@ app.post('/api/register', async (req, res) => {
         
         await user.save();
         
-        // Generate token
         const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
         
-        res.status(201).json({ token, user: { id: user._id, username: user.username, email: user.email, avatar: user.avatar } });
+        res.status(201).json({ 
+            token, 
+            user: { 
+                id: user._id, 
+                username: user.username, 
+                email: user.email, 
+                avatar: user.avatar 
+            } 
+        });
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
     }
@@ -85,27 +89,32 @@ app.post('/api/login', async (req, res) => {
     try {
         const { email, password } = req.body;
         
-        // Find user
         const user = await User.findOne({ email });
         if (!user) {
             return res.status(400).json({ message: 'Invalid credentials' });
         }
         
-        // Check password
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(400).json({ message: 'Invalid credentials' });
         }
         
-        // Generate token
         const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1d' });
         
-        // Update user status
         user.status = 'online';
         user.lastSeen = Date.now();
         await user.save();
         
-        res.json({ token, user: { id: user._id, username: user.username, email: user.email, avatar: user.avatar, status: user.status } });
+        res.json({ 
+            token, 
+            user: { 
+                id: user._id, 
+                username: user.username, 
+                email: user.email, 
+                avatar: user.avatar, 
+                status: user.status 
+            } 
+        });
     } catch (error) {
         res.status(500).json({ message: 'Server error' });
     }
@@ -121,7 +130,6 @@ app.post('/api/forgot-password', async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
         
-        // Generate reset token (in a real app, you'd send this via email)
         const resetToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '1h' });
         user.resetToken = resetToken;
         user.resetTokenExpiry = Date.now() + 3600000; // 1 hour
@@ -137,15 +145,17 @@ app.post('/api/reset-password', async (req, res) => {
     try {
         const { token, newPassword } = req.body;
         
-        // Verify token
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-        const user = await User.findOne({ _id: decoded.id, resetToken: token, resetTokenExpiry: { $gt: Date.now() } });
+        const user = await User.findOne({ 
+            _id: decoded.id, 
+            resetToken: token, 
+            resetTokenExpiry: { $gt: Date.now() } 
+        });
         
         if (!user) {
             return res.status(400).json({ message: 'Invalid or expired token' });
         }
         
-        // Update password
         user.password = await bcrypt.hash(newPassword, 10);
         user.resetToken = undefined;
         user.resetTokenExpiry = undefined;
@@ -216,13 +226,11 @@ const io = socketIO(server, {
 io.on('connection', (socket) => {
     console.log('New client connected:', socket.id);
     
-    // Join room with user ID
     socket.on('join', (userId) => {
         socket.join(userId);
         console.log(`User ${userId} joined`);
     });
     
-    // Send message
     socket.on('sendMessage', async ({ senderId, receiverId, content, type }) => {
         try {
             const message = new Message({
@@ -246,7 +254,6 @@ io.on('connection', (socket) => {
         }
     });
     
-    // Call signaling
     socket.on('callUser', ({ from, to, signal, callType }) => {
         io.to(to).emit('incomingCall', { from, signal, callType });
     });
@@ -263,7 +270,6 @@ io.on('connection', (socket) => {
         io.to(to).emit('callEnded');
     });
     
-    // Disconnect
     socket.on('disconnect', () => {
         console.log('Client disconnected:', socket.id);
     });
