@@ -263,10 +263,9 @@ app.post('/api/forgot-password', async (req, res) => {
     user.resetTokenExpiry = Date.now() + 3600000; // 1 hour
     await user.save();
     
-    // In production, you would send an email here
     res.json({ 
       message: 'Password reset token generated',
-      resetToken // In production, don't send this in response
+      resetToken
     });
   } catch (error) {
     console.error('Forgot password error:', error);
@@ -344,6 +343,15 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     dbStatus: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
     uptime: process.uptime()
+  });
+});
+
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({
+    message: 'vChat API Server',
+    status: 'running',
+    documentation: 'https://github.com/your-repo/docs'
   });
 });
 
